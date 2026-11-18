@@ -16,6 +16,7 @@ import { useTiveMonitoring } from './TiveMonitoringProvider';
 import { formatCarrierName, toCamelCase, toSnakeCase } from '../utils/formatters';
 import { TableSkeleton } from './ui/Skeleton';
 import { getTiveHistory } from '../services/tiveService';
+import { canManageUsaDispatch, isActiveUsaDispatch, dispatchFollowupPatch, dispatchNextStop, dispatchIncidents } from '../utils/dispatch';
 
 interface UsaShipmentReportPageProps {
     initialView?: 'active' | 'completed';
@@ -115,7 +116,7 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
     // SOLUCIÓN: Agregada validación segura con user?.role
     const canManageShipments = useMemo(() => {
         if (!user || !user.role) return false;
-        return [UserRole.COORDINADOR, UserRole.SUBGERENCIA, UserRole.ADMINISTRATIVO, UserRole.GERENCIA, UserRole.ADMINISTRADOR].includes(user.role);
+        return canManageUsaDispatch(user.role);
     }, [user]);
 
     const ensureShipmentWriteAccess = () => {
@@ -185,15 +186,14 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
     const unifiedActiveData = useMemo(() => {
         return reports.filter(r => {
             const st = (r.logisticStatus || '').toLowerCase();
-            const dateObj = new Date(r.realDepartureDate || r.departureDateTime || r.created_at || new Date());
-            return st !== 'finalizado' && st !== 'cancelado' && dateObj.getFullYear() === currentYear;
+            return isActiveUsaDispatch(st);
         });
     }, [reports, currentYear]);
 
     const filteredData = useMemo(() => {
         let base = view === 'active' ? unifiedActiveData : reports.filter(r => {
             const st = (r.logisticStatus || '').toLowerCase();
-            const dateObj = new Date(r.realDepartureDate || r.departureDateTime || r.created_at || new Date());
+            const dateObj = new Date(r.arrivalDateTime || r.realDepartureDate || r.departureDateTime || r.created_at || new Date());
             return (st === 'finalizado' || st === 'cancelado') && dateObj.getFullYear() === currentYear;
         });
         if (searchQuery.trim()) {
@@ -207,8 +207,8 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
         return reports.filter(r => r.ratingPending === true).length;
     }, [reports]);
 
-    const fetchData = useCallback(async () => {
-        setLoading(true);
+    const fetchData = useCallback(async (background = false) => {
+        if (!background) setLoading(true);
         try {
             const tables = [
                 { name: 'usa_shipment_reports', order: { col: 'created_at', asc: false } },
@@ -237,7 +237,7 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
 
             const [reportsRes, specsRes, proyectosRes, statusesRes, clientesRes, tiposUnidadRes, escalasRes, responsablesRes, lineasRes] = results;
 
-            setReports(toCamelCase(reportsRes.data) as UsaShipmentReport[]);
+            setReports((toCamelCase(reportsRes.data || []) as UsaShipmentReport[]).map(r=>({...r,incidents:dispatchIncidents(r.incidents)})));
             setProductSpecs(toCamelCase(specsRes.data || []) as ProductoDB[]);
             setProyectos(toCamelCase(proyectosRes.data || []) as ProyectoDB[]);
             setLogisticStatuses(toCamelCase(statusesRes.data || []) as EstatusDB[]);
@@ -258,7 +258,15 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
         }
     }, [addNotification]);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => {
+        void fetchData();
+        const refresh = () => { void fetchData(true); };
+        const channel = supabase.channel(`active-dispatches-${Math.random()}`)
+            .on('postgres_changes', {event:'*',schema:'public',table:'usa_shipment_reports'}, refresh).subscribe();
+        const timer = window.setInterval(refresh, 30000);
+        window.addEventListener('focus', refresh);
+        return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh); void supabase.removeChannel(channel); };
+    }, [fetchData]);
 
     useEffect(() => {
         const timer = setInterval(() => setCurrentTime(new Date()), 60000);
@@ -296,15 +304,23 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
         try {
             const items = Array.isArray(reportData) ? reportData : [reportData];
             for (const item of items) {
+                const linked = reports.find(r => r.id === item.id && r.sourceLoadId);
+                if (linked) {
+                    const {error} = await supabase.from('usa_shipment_reports').update(toSnakeCase(dispatchFollowupPatch(item))).eq('id',linked.id);
+                    if (error) throw error;
+                    continue;
+                }
                 const { id, createdAt, loteOriginalId, loteSecundarioId, lotesAsociados, ...data } = item as any;
                 const finalStatus = status || data.logisticStatus || 'Confirmado';
                 const payload = { ...data, logisticStatus: finalStatus, lotes_asociados: lotesAsociados || [] };
                 const dataToSave = toSnakeCase(payload);
 
                 if (id && String(id).length > 15) {
-                    await supabase.from('usa_shipment_reports').update(dataToSave).eq('id', id);
+                    const {error} = await supabase.from('usa_shipment_reports').update(dataToSave).eq('id', id);
+                    if (error) throw error;
                 } else {
-                    await supabase.from('usa_shipment_reports').insert(dataToSave);
+                    const {error} = await supabase.from('usa_shipment_reports').insert(dataToSave);
+                    if (error) throw error;
                 }
 
                 if (lotesAsociados && lotesAsociados.length > 0) {
@@ -359,11 +375,12 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
         
         const finalArrivalDate = new Date(completionDate).toISOString();
 
-        await supabase.from('usa_shipment_reports').update({
+        const {error} = await supabase.from('usa_shipment_reports').update({
             logistic_status: 'Finalizado',
             arrival_date_time: finalArrivalDate,
             rating_pending: true
         }).eq('id', reportToComplete);
+        if (error) { addNotification({type:'danger',title:'No se pudo finalizar',message:error.message}); return; }
 
         addNotification({ type: 'info', title: 'Viaje Concluido', message: 'Por favor califique el servicio de la línea.' });
         await fetchData();
@@ -683,7 +700,8 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
             accessor: (r) => {
                 const live = latestTiveData[r.id];
                 const destClient = clientes.find(c => c.id === r.clientId);
-                const destination = encodeURIComponent(`${destClient?.nombre || 'Destino'} USA`); 
+                const nextStop = dispatchNextStop(r);
+                const destination = encodeURIComponent(nextStop?.address || nextStop?.name || `${destClient?.nombre || 'Destino'} USA`);
                 
                 if (live?.lat && live?.lng) {
                     const mapUrl = `https://www.google.com/maps/dir/?api=1&origin=${live.lat},${live.lng}&destination=${destination}`;
@@ -704,7 +722,7 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
                     return (
                         <div className="flex items-center gap-1.5 px-2 text-[9px] font-bold text-text-muted italic">
                             <div className="w-1.5 h-1.5 rounded-full bg-gray-300"></div>
-                            Sin GPS
+                            {nextStop ? `Siguiente: ${nextStop.name} · Sin GPS` : 'Sin GPS'}
                         </div>
                     );
                 }
@@ -714,7 +732,7 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
             header: "ETA",
             accessor: (r) => {
                 const live = latestTiveData[r.id];
-                const eta = live?.predictedEta;
+                const eta = live?.predictedEta || r.expectedArrival || r.routePlan?.stops?.at(-1)?.at;
                 
                 if (!eta) {
                     return (
@@ -729,6 +747,7 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
                     <div className="flex items-center gap-1.5">
                         <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></div>
                         <span className="text-[10px] font-black text-primary uppercase">
+                            <small className="block">{live?.predictedEta ? live.etaLabel : r.expectedArrival ? 'Capturada' : 'Programada'}</small>
                             {new Date(eta).toLocaleString('es-MX', { 
                                 day: '2-digit', 
                                 month: 'short', 
@@ -789,7 +808,7 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
                     )}
                     <button onClick={() => { setReportForIncident(r); setIsIncidentModalOpen(true); }} className="p-2 rounded-lg hover:bg-danger/10 text-text-muted hover:text-danger transition-colors"><ExclamationIcon className="w-5 h-5" /></button>
                     <button onClick={() => handleOpenForm(r)} className="p-2 rounded-lg hover:bg-primary/10 text-text-muted hover:text-primary transition-colors"><PencilIcon className="w-5 h-5" /></button>
-                    <button onClick={() => { setReportToDelete(r.id); setIsDeleteModalOpen(true); }} className="p-2 rounded-lg hover:bg-danger/10 text-text-muted hover:text-danger transition-colors"><TrashIcon className="w-5 h-5" /></button>
+                    {!r.sourceLoadId && <button onClick={() => { setReportToDelete(r.id); setIsDeleteModalOpen(true); }} className="p-2 rounded-lg hover:bg-danger/10 text-text-muted hover:text-danger transition-colors"><TrashIcon className="w-5 h-5" /></button>}
                 </div>
             )
         }
@@ -816,12 +835,12 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
                             <ExclamationIcon className="w-4 h-4" /> {pendingRatingsCount} Pendientes de Auditoría
                         </button>
                     )}
-                    <button
+                    {user.role !== UserRole.TRAFICO_RI && <button
                         onClick={() => handleOpenForm()}
                         className="bg-primary text-white px-6 py-3 rounded-xl font-bold shadow-lg hover:bg-primary-focus hover:shadow-primary/20 transition-all flex items-center gap-2 text-xs uppercase tracking-widest active:scale-95"
                     >
                         <PlusIcon className="w-5 h-5" /> Nuevo Despacho
-                    </button>
+                    </button>}
                 </div>
             </div>
 
@@ -985,7 +1004,7 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
                         onRowClick={handleOpenDetailsModal}
                         onReorder={handleReorder}
                         rowStyle={getRowStyle}
-                        emptyMessage="Sin movimientos registrados en este segmento o año en curso."
+                        emptyMessage={view === 'active' ? 'Sin despachos activos.' : 'Sin movimientos finalizados en el año en curso.'}
                     />
                 ) : (
                     <ShipmentCardView
@@ -1073,7 +1092,7 @@ const UsaShipmentReportPage: React.FC<UsaShipmentReportPageProps> = ({ initialVi
             {isFormOpen && <UsaShipmentForm isOpen={isFormOpen} onClose={handleCloseForm} onSubmit={handleSubmit} initialData={reports.find(r => r.id === selectedReportId) || null} productSpecs={productSpecs} proyectos={proyectos} logisticStatuses={logisticStatuses} clientes={clientes} tiposUnidad={tiposUnidad} escalas={escalas} responsables={responsables} />}
             
             {/* LÍNEA MODIFICADA AQUÍ PARA PASAR "lineas={lineas}" */}
-            {isDetailsModalOpen && <ShipmentDetailsModal isOpen={isDetailsModalOpen} onClose={() => setIsDetailsModalOpen(false)} report={reports.find(r => r.id === reportIdForDetails)!} productSpecs={productSpecs} proyectos={proyectos} clientes={clientes} logisticStatuses={logisticStatuses} lineas={lineas} onCompleteTrip={setReportToComplete} onRefresh={fetchData} />}
+            {isDetailsModalOpen && <ShipmentDetailsModal isOpen={isDetailsModalOpen} onClose={() => setIsDetailsModalOpen(false)} report={reports.find(r => r.id === reportIdForDetails)!} productSpecs={productSpecs} proyectos={proyectos} clientes={clientes} logisticStatuses={logisticStatuses} canManage={canManageShipments} onCompleteTrip={setReportToComplete} onRefresh={fetchData} />}
             
             {isIncidentModalOpen && reportForIncident && <IncidentModal isOpen={isIncidentModalOpen} onClose={() => setIsIncidentModalOpen(false)} report={reportForIncident} logisticStatuses={logisticStatuses} onUpdate={fetchData} />}
             {reportToRate && (

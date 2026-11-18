@@ -9,6 +9,27 @@ interface PortalProps {
 const Portal: React.FC<PortalProps> = ({ onLogin }) => {
   const areas = [
     {
+      role: UserRole.COMERCIAL,
+      title: 'Comercial',
+      desc: 'Clientes, productos y cantidades requeridas para la semana.',
+      color: 'bg-cyan-700',
+      icon: '📋'
+    },
+    {
+      role: UserRole.TRAFICO_RI,
+      title: 'Tráfico RI',
+      desc: 'Unidades sugeridas, consolidaciones y recorridos de transporte.',
+      color: 'bg-blue-800',
+      icon: '🚚'
+    },
+    {
+      role: UserRole.COMPRAS,
+      title: 'Compras',
+      desc: 'Solicitudes de recolección de insumos para Logística.',
+      color: 'bg-cyan-700',
+      icon: '📋'
+    },
+    {
       role: UserRole.DIRECCION,
       title: 'Dirección General',
       desc: 'KPIs estratégicos y matriz de cumplimiento.',

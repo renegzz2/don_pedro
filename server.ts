@@ -159,7 +159,7 @@ async function startServer() {
       (req as any).rawBody = Buffer.from(buf);
     }
   }));
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
   const server = createServer(app);
   const wss = new WebSocketServer({ server });
 
@@ -526,13 +526,11 @@ async function startServer() {
     const vite = await createViteServer({
       configFile: false,
       root: process.cwd(),
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: { port: Number(process.env.VITE_HMR_PORT) || 24678 } },
       appType: "spa",
       plugins: [react()],
       optimizeDeps: {
-        noDiscovery: true,
-        include: [],
-        entries: [],
+        include: ['react', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
       },
     });
     app.use(vite.middlewares);

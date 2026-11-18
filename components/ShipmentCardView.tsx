@@ -45,7 +45,7 @@ const ShipmentCardView: React.FC<ShipmentCardViewProps> = ({
                 const live = latestTiveData[report.id];
                 const ideal = report.idealTemp || report.temperature || '--';
                 const hasExcursion = live?.temp && ideal !== '--' && Math.abs(Number(live.temp) - Number(ideal)) > 4;
-                const client = clientes.find(c => c.id === report.clientId)?.nombre || 'S/D';
+                const client = (report.clientIds?.length ? report.clientIds : [report.clientId]).map(id=>clientes.find(c=>c.id===id)?.nombre).filter(Boolean).join(' / ') || 'S/D';
                 const carrier = formatCarrierName(lineas.find(l => l.id === report.lineaTransportistaId)?.nombre || 'S/D');
                 const totalBoxes = Number(report.totalRealBoxes || report.products?.reduce((acc: number, p: any) => acc + (Number(p.quantity || p.cantidad || 0)), 0) || 0);
 
@@ -130,7 +130,7 @@ const ShipmentCardView: React.FC<ShipmentCardViewProps> = ({
                                 )}
                                 <button onClick={() => onIncidentClick(report)} className="p-2.5 rounded-xl bg-surface-secondary hover:bg-danger/10 text-text-muted hover:text-danger transition-all border border-border/50"><ExclamationIcon className="w-5 h-5" /></button>
                                 <button onClick={() => onEditClick(report)} className="p-2.5 rounded-xl bg-surface-secondary hover:bg-primary/10 text-text-muted hover:text-primary transition-all border border-border/50"><PencilIcon className="w-5 h-5" /></button>
-                                <button onClick={() => onDeleteClick(report.id)} className="p-2.5 rounded-xl bg-surface-secondary hover:bg-danger/10 text-text-muted hover:text-danger transition-all border border-border/50"><TrashIcon className="w-5 h-5" /></button>
+                                {!report.sourceLoadId && <button onClick={() => onDeleteClick(report.id)} className="p-2.5 rounded-xl bg-surface-secondary hover:bg-danger/10 text-text-muted hover:text-danger transition-all border border-border/50"><TrashIcon className="w-5 h-5" /></button>}
                             </div>
                         </div>
                     </div>

@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, User, UserRole } from '../types';
+import { PLANNING_SECTIONS, planningSectionAccess } from '../utils/planningAccess';
+import { trafficViews } from '../utils/dispatch';
 import { DownloadIcon, ChartBarIcon, MapIcon, SettingsIcon, TruckIcon, LayoutGridIcon, DatabaseIcon, TableIcon, BoxIcon, EyeIcon } from './icons';
 import { subscribeUserToPush } from '../pushService';
 import { ClipboardCheck, FileText as DocumentIcon } from "lucide-react";
@@ -44,10 +46,15 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user, onLogo
     }`;
 
   const canSee = (view: View) => {
+    const sectionAccess = planningSectionAccess(view,user.role);
+    if(sectionAccess !== undefined) return sectionAccess;
     if ([View.INSPECTION_QUALITY, View.INSPECTION_DASHBOARD, View.INSPECTION_INCIDENTS].includes(view)) {
       return [UserRole.ADMINISTRADOR, UserRole.INSPECTOR].includes(user.role);
     }
+    if (user.role === UserRole.COMPRAS) return [View.STRATEGIC_PLANNING,View.SETTINGS].includes(view);
+      if (user.role === UserRole.TRAFICO_RI) return trafficViews.includes(view);
     if (user.role === UserRole.INSPECTOR) return false;
+    if (user.role === UserRole.COMERCIAL) return [View.STRATEGIC_PLANNING, View.SETTINGS].includes(view);
     if ([UserRole.GERENCIA, UserRole.ADMINISTRADOR].includes(user.role)) return true;
     if ([UserRole.DIRECCION, UserRole.SUBDIRECCION].includes(user.role)) {
       return [View.DASHBOARD, View.STRATEGIC_PLANNING, View.EXEC_REPORT, View.TIVE_MAP, View.USA_SHIPMENTS, View.SETTINGS, View.FREIGHT_PAYMENTS, View.COMPLEMENTARY_SERVICES, View.CUSTOMS_SERVICES].includes(view);
@@ -56,10 +63,10 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user, onLogo
       return [View.STRATEGIC_PLANNING, View.LIDER_PROGRAMACION_USA, View.SETTINGS].includes(view);
     }
     if (user.role === UserRole.COORDINADOR) {
-      return [View.DASHBOARD, View.LIDER_PROGRAMACION_USA, View.USA_SHIPMENTS, View.DATABASE, View.TIVE_MAP, View.INVENTORY, View.SETTINGS].includes(view);
+      return [View.DASHBOARD, View.STRATEGIC_PLANNING, View.LIDER_PROGRAMACION_USA, View.USA_SHIPMENTS, View.DATABASE, View.TIVE_MAP, View.INVENTORY, View.SETTINGS].includes(view);
     }
     if ([UserRole.SUBGERENCIA, UserRole.ADMINISTRATIVO].includes(user.role)) {
-      return [View.USA_SHIPMENTS, View.DATABASE, View.TIVE_MAP, View.SETTINGS, View.FREIGHT_PAYMENTS, View.COMPLEMENTARY_SERVICES, View.CUSTOMS_SERVICES, View.INVENTORY].includes(view);
+      return [View.STRATEGIC_PLANNING, View.USA_SHIPMENTS, View.DATABASE, View.TIVE_MAP, View.SETTINGS, View.FREIGHT_PAYMENTS, View.COMPLEMENTARY_SERVICES, View.CUSTOMS_SERVICES, View.INVENTORY].includes(view);
     }
     return false;
   };
@@ -138,6 +145,13 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user, onLogo
           </button>
         )}
 
+        {PLANNING_SECTIONS.filter(section=>canSee(section.view)).map(section=>(
+          <button key={section.view} onClick={()=>onNavigate(section.view)} className={linkClass(section.view)}>
+            <div className="p-1.5 rounded-lg bg-white/5 text-white/40 group-hover:text-white"><TableIcon className="w-4 h-4" /></div>
+            <span className="text-sm font-semibold tracking-tight text-left">{section.label}</span>
+          </button>
+        ))}
+
         {[UserRole.ADMINISTRADOR, UserRole.GERENCIA].includes(user.role) && (
           <div className="pt-4 pb-2 px-4">
             <span className="text-[9px] font-black text-white/30 uppercase tracking-[0.2em]">Gestión Operativa</span>
@@ -158,6 +172,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user, onLogo
         )}
 
         {canSee(View.USA_SHIPMENTS) && (
+          <>
           <button
               onClick={() => onNavigate(View.USA_EMBARQUES)}
               className={linkClass(View.USA_EMBARQUES)}
@@ -177,6 +192,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, user, onLogo
               </div>
               <span className="text-sm font-semibold">Operaciones USA</span>
           </button>
+          </>
         )}
 
         {canSeeInspections && (

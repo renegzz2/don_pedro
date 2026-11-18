@@ -2,7 +2,8 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { supabase } from '../lib/supabase';
 import { useNotification } from './NotificationProvider';
 import { toCamelCase } from '../utils/formatters';
-import { ProductoDB, ClienteDB, ProyectoDB } from '../types';
+import { ProductoDB, ClienteDB, ProyectoDB, UsaShipmentReport } from '../types';
+import { dispatchTargetIds } from '../utils/dispatch';
 
 interface TiveData {
     temp: number | null;
@@ -90,7 +91,7 @@ export const TiveMonitoringProvider: React.FC<{ children: React.ReactNode }> = (
         try {
             const { data: activeShipments } = await supabase
                 .from('usa_shipment_reports')
-                .select('id, trip_id, tive_tracker_id, client_id, project_id, stop_over_project_id, arrived_at_stop_over, departed_from_stop_over, expected_arrival, logistic_status')
+                .select('id, trip_id, tive_tracker_id, client_id, project_id, stop_over_project_id, arrived_at_stop_over, departed_from_stop_over, expected_arrival, logistic_status, source_load_id, route_plan, source_manifest')
                 .neq('logistic_status', 'Finalizado')
                 .neq('logistic_status', 'Cancelado');
 
@@ -123,7 +124,9 @@ export const TiveMonitoringProvider: React.FC<{ children: React.ReactNode }> = (
                     
                     const displaySpeed = (latest.speed === 0 && avgSpeed > 5 && isRealtime) ? avgSpeed : (latest.speed || 0);
 
-                    const client = clientes.find(c => c.id === shipment.client_id);
+                    const target = shipment.source_load_id ? dispatchTargetIds(toCamelCase<UsaShipmentReport>(shipment)) : null;
+                    const client = clientes.find(c => c.id === (target ? target.clientId : shipment.client_id));
+                    const destinationPoint = client || (target?.projectId ? proyectos.find(p=>p.id===target.projectId) : undefined);
                     const project = proyectos.find(p => p.id === shipment.project_id);
                     const stopOver = shipment.stop_over_project_id ? proyectos.find(p => p.id === shipment.stop_over_project_id) : null;
 
@@ -134,8 +137,8 @@ export const TiveMonitoringProvider: React.FC<{ children: React.ReactNode }> = (
                     let distanceToClient: number | undefined = undefined;
                     let computedEta: string | undefined = undefined;
 
-                    if (client?.lat && client?.lng && latest.lat && latest.lng) {
-                        distanceToClient = Math.round(calculateDistance(latest.lat, latest.lng, client.lat, client.lng));
+                    if (destinationPoint?.lat && destinationPoint?.lng && latest.lat && latest.lng) {
+                        distanceToClient = Math.round(calculateDistance(latest.lat, latest.lng, destinationPoint.lat, destinationPoint.lng));
                         
                         // Estima el tiempo restante usando la velocidad actual o un promedio de carretera (70 km/h)
                         const speedKmH = displaySpeed > 15 ? displaySpeed : 70;
@@ -153,7 +156,7 @@ export const TiveMonitoringProvider: React.FC<{ children: React.ReactNode }> = (
                         avgSpeed: avgSpeed,
                         predictedEta: computedEta,
                         distanceLeftKm: distanceToClient,
-                        etaLabel: 'Arribo a Cliente',
+                        etaLabel: target?.stop ? `Arribo a ${target.stop.name}` : 'Arribo a Cliente',
                         isDelayed: false,
                         noSignal: dataAgeMinutes > 40,
                         lat: latest.lat,
@@ -161,7 +164,7 @@ export const TiveMonitoringProvider: React.FC<{ children: React.ReactNode }> = (
                     };
                 }
             }
-            setLatestTiveData(prev => ({ ...prev, ...newData }));
+            setLatestTiveData(newData);
         } catch (error) {
             console.error("Error motor realtime:", error);
         }

@@ -6,6 +6,9 @@ export enum View {
   LIDER_PROGRAMACION_USA = 'LIDER_PROGRAMACION_USA',
   FRUIT_QUALITY = 'FRUIT_QUALITY',
   STRATEGIC_PLANNING = 'STRATEGIC_PLANNING',
+  PACKING_PLANNING = 'PACKING_PLANNING',
+  SUPPLY_COLLECTION = 'SUPPLY_COLLECTION',
+  TRANSPORT_PLANNING = 'TRANSPORT_PLANNING',
   EXEC_REPORT = 'EXEC_REPORT',
   TIVE_MAP = 'TIVE_MAP',
   SETTINGS = 'SETTINGS',
@@ -21,6 +24,9 @@ export enum View {
 }
 
 export enum UserRole {
+  COMERCIAL = 'COMERCIAL',
+  COMPRAS = 'COMPRAS',
+  TRAFICO_RI = 'TRAFICO_RI',
   DIRECCION = 'DIRECCION',
   SUBDIRECCION = 'SUBDIRECCION',
   LIDER_PROYECTO = 'LIDER_PROYECTO',
@@ -56,6 +62,7 @@ export interface Message {
 }
 
 export interface StrategicProjection extends BaseDBEntity {
+  planningYear?: number;
   semanaFiscal: number;
   canalVenta: string;
   liderProyectoId?: string;
@@ -64,6 +71,10 @@ export interface StrategicProjection extends BaseDBEntity {
   clientId?: string;
   presupuestoMonetario: number;
   venta2023Referencia: number;
+  venta2025Referencia?: number;
+  precioCompra2025?: number;
+  ng2025?: number;
+  ss2025?: number;
   ng_2025: number;
   ss_2025: number;
   precioVenta2025?: number;
@@ -82,10 +93,24 @@ export interface StrategicProjection extends BaseDBEntity {
   autorizado?: boolean;
   ventaRealManual?: number;
   desgloseDiario?: { fecha: string; cantidad: number }[];
+  packingPlan?: { fecha: string; cantidad: number }[];
   lineaTransportistaId?: string;
   unidadTransporteId?: string;
   comentariosRechazo?: string;
   canjeProductos?: { productId: string; quantity: number; type?: 'normal' | 'canje' }[]; // Productos adicionales o sustitutos
+}
+
+export interface FreightSchedule {
+  id: string;
+  loadId?: string;
+  projectionId: string;
+  scheduledDate: string;
+  arrivalAt: string;
+  carrierId: string;
+  quantity: number;
+  unitLabel: string;
+  notes?: string;
+  proyeccion?: StrategicProjection;
 }
 
 export interface LiderProgramacionUsaReport extends BaseDBEntity {
@@ -155,6 +180,8 @@ export interface ProductoDB extends BaseDBEntity {
   aliasUsa?: string;
   configUsa?: string;
   pesoUsa?: number;
+  pesoIncluyeEmpaque?: boolean;
+  empaqueKg?: number;
   cajasPalletUsa?: number;
   limiteTolerable?: string;
   tempOptima?: number;
@@ -173,6 +200,7 @@ export interface ProductoDB extends BaseDBEntity {
 }
 
 export interface ClienteDB extends BaseDBEntity {
+  activo?: boolean;
   nombre: string;
   direccion: string;
   lat?: number;
@@ -202,6 +230,19 @@ export interface EscalaDB extends BaseDBEntity {
 }
 
 export interface TipoUnidad extends BaseDBEntity {
+    cargaUtilLb?: number;
+    pesoBrutoMaxLb?: number;
+    refrigerada?: boolean;
+    temperaturaMinF?: number;
+    temperaturaMaxF?: number;
+    taraPalletKg?: number;
+    longitudInteriorM?: number;
+    pernoReyM?: number;
+    tandemCajaM?: number;
+    quintaRuedaM?: number;
+    distanciaEjesTractorM?: number;
+    pesosVaciosEjesLb?: number[];
+    limitesEjesLb?: number[];
     unidad: string;
     capacidad: string;
     nombre?: string;
@@ -243,6 +284,16 @@ export interface Incident {
 }
 
 export interface UsaShipmentReport extends BaseDBEntity {
+  sourceLoadId?: string;
+  sourceShipmentIds?: string[];
+  projectIds?: string[];
+  sourceManifest?: { productoId: string; proyectoId?: string; clientId?: string; cantidadCajas: number; numeroPallet?: string; pickupStopId?: string; departureAt?: string }[];
+  routePlan?: import('./transportTypes').TripPlan;
+  sourceAudit?: { shipmentId: string; status?: string; inspectionPending?: boolean; differences?: string[] }[];
+  economicNumber?: string;
+  trailerFeet?: string;
+  continuousMode?: string;
+  thermographSerial?: string;
   tripId: string;
   project: string;
   projectId?: string;

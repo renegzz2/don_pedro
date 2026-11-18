@@ -5,6 +5,7 @@ import { UsaShipmentReport, ProductoDB, EstatusDB, ClienteDB, TipoUnidad, Escala
 import { TrashIcon, PlusIcon, TruckIcon, MapPinIcon, BoxIcon, SwitchHorizontalIcon, ExclamationIcon, DatabaseIcon, XIcon } from './icons';
 import { useNotification } from './NotificationProvider';
 import { formatCarrierName, getTipoUnidadName, toCamelCase, toSnakeCase } from '../utils/formatters';
+import UsaDispatchFollowupForm from './UsaDispatchFollowupForm';
 
 const MANUAL_PROJECT_OPTION = '__MANUAL_PROJECT__';
 const MANUAL_PRODUCT_OPTION = '__MANUAL_PRODUCT__';
@@ -1205,4 +1206,7 @@ const UsaShipmentForm: React.FC<UsaShipmentFormProps> = ({
     );
 };
 
-export default UsaShipmentForm;
+const ShipmentForm: React.FC<UsaShipmentFormProps> = props => props.initialData?.sourceLoadId
+    ? (props.isOpen ? <UsaDispatchFollowupForm report={props.initialData} onClose={props.onClose} onSubmit={props.onSubmit} productSpecs={props.productSpecs} clientes={props.clientes} logisticStatuses={props.logisticStatuses} responsables={props.responsables}/> : null)
+    : <UsaShipmentForm {...props}/>;
+export default ShipmentForm;

@@ -1,0 +1,54 @@
+import React, { useState } from 'react';
+import { supabase } from '../lib/supabase';
+import { UserRole, type User, type StrategicProjection, type ProyectoDB, type ProductoDB, type ClienteDB, type FreightSchedule, type LineaTransporteDB } from '../types';
+import type { TransportSpec, TripPlan } from '../transportTypes';
+import { suggestTrips, initialTrip } from '../utils/tripPlanning';
+import { useTransportTrips } from '../hooks/useTransportTrips';
+import TripPlanEditor from './TripPlanEditor';
+import TripLoadMap from './TripLoadMap';
+interface Props {
+    goals: StrategicProjection[]; projects: ProyectoDB[]; products: ProductoDB[]; clients: ClienteDB[];
+    types: TransportSpec[]; schedules: FreightSchedule[]; carriers: LineaTransporteDB[];
+    days: { dateString: string; formatted: string; name: string }[];
+    canSchedule: boolean; user: User; onSaved: () => Promise<void>;
+}
+export default function ConsolidatedTransportCalendar({ goals,projects,products,clients,types,schedules,carriers,days,canSchedule,user,onSaved }:Props){
+    const data=useTransportTrips(days[0]?.dateString||'',days.at(-1)?.dateString||'');
+    const [editing,setEditing]=useState<TripPlan|null>(null),[view,setView]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+    const [confirm,setConfirm]=useState<TripPlan|null>(null),[scale,setScale]=useState(['','','']),[reference,setReference]=useState('');
+    const [received,setReceived]=useState<Record<string,number>>({});
+    const refresh=async()=>{await Promise.all([data.refresh(),onSaved()]);};
+    const booked=schedules.reduce<Record<string,number>>((acc,s)=>{acc[`${s.projectionId}:${s.scheduledDate}`]=(acc[`${s.projectionId}:${s.scheduledDate}`]||0)+s.quantity;return acc;},{});
+    const hydrate=(plan:TripPlan)=>({...plan,stops:plan.stops.map(s=>s.id.startsWith('p-')?{...s,name:projects.find(p=>`p-${p.id}`===s.id)?.nombre||s.name,address:projects.find(p=>`p-${p.id}`===s.id)?.direccion||''}:s.id.startsWith('c-')?{...s,name:clients.find(c=>`c-${c.id}`===s.id)?.nombre||s.name,address:clients.find(c=>`c-${c.id}`===s.id)?.direccion||''}:s)});
+    const remove=async(trip:TripPlan)=>{if(!window.confirm('¿Cancelar el viaje y liberar todas sus cajas e insumos?'))return;setBusy(true);const r=await supabase.rpc('cancel_transport_trip',{p_trip_id:trip.id,p_expected_revision:trip.revision});if(r.error)setError(r.error.message);else await refresh();setBusy(false);};
+    const confirmStop=async()=>{if(!confirm)return;setBusy(true);setError('');const stop=confirm.stops.find(s=>!s.completedAt);const r=await supabase.rpc('confirm_transport_stop',{p_trip_id:confirm.id,p_expected_revision:confirm.revision,p_stop_id:stop?.id,p_weights:scale.map(s=>s===''?null:Number(s)),p_reference:reference,p_received:received});if(r.error)setError(r.error.message);else{setConfirm(null);await refresh();}setBusy(false);};
+    const canOperate=[UserRole.TRAFICO_RI,UserRole.ADMINISTRADOR].includes(user.role);
+    const groups=[...new Set(goals.map(g=>`${g.proyectoId}:${g.clientId}`))];
+    const legacy=schedules.filter(s=>!data.trips.some(t=>t.id===s.loadId));
+    return <section className="space-y-4">
+        <h2 className="font-black text-primary">Viajes y unidades consolidadas · varios clientes y paradas</h2>
+        <p className="text-xs text-text-secondary">Cada viaje aparece una sola vez. Las sugerencias consideran pallets, peso bruto de cajas/tarimas y compatibilidad térmica. Las cantidades restantes siguen pendientes; puedes añadir otros clientes y recolecciones al editar el recorrido.</p>
+        {(error||data.error)&&<p role="alert" className="text-danger">{error||data.error}</p>}
+        <div className="overflow-x-auto"><table className="w-full text-xs bg-surface rounded-xl"><thead><tr><th className="p-2 text-left">Proyecto / Cliente</th>{days.map(d=><th key={d.dateString}>{d.formatted}</th>)}</tr></thead><tbody>{groups.map(key=>{const rows=goals.filter(g=>`${g.proyectoId}:${g.clientId}`===key),g=rows[0];return <tr key={key} className="border-t border-border"><th className="p-2 text-left">{projects.find(p=>p.id===g.proyectoId)?.nombre} / {clients.find(c=>c.id===g.clientId)?.nombre||'Sin cliente'}</th>{days.map(d=><td className="p-2 text-center" key={d.dateString}>{rows.reduce((n,g)=>n+(g.packingPlan||[]).filter(p=>p.fecha.slice(0,10)===d.dateString).reduce((s,p)=>s+p.cantidad,0),0)} cjs</td>)}</tr>;})}</tbody></table></div>
+        <div className="space-y-3">{data.trips.map(trip=><article key={trip.id} className="border border-border rounded-xl bg-surface p-4 space-y-2">
+            <div className="flex gap-3 flex-wrap justify-between"><strong>{trip.equipment.name} · Viaje {trip.id.slice(0,8)} · {trip.scheduledDate}</strong><span>{carriers.find(c=>c.id===trip.carrierId)?.nombre}</span></div>
+            <p className="text-xs font-bold text-primary">{trip.temperatureF != null ? `Temperatura de salida de la caja: ${trip.temperatureF} °F` : 'Temperatura de salida pendiente de confirmar si requiere refrigeración'}</p>
+            <p className="text-sm">{trip.stops.map(s=>`${s.completedAt?'✓ ':''}${s.name}`).join(' → ')}</p>
+            <div className="text-xs">{trip.cargo.map(c=><div key={c.id}>{projects.find(p=>p.id===c.projectId)?.nombre} / {clients.find(t=>t.id===c.clientId)?.nombre||'Insumos'} · {c.description} · {c.kind==='product'?`${c.boxes} cajas`:`${c.pallets} posiciones / ${c.weightKg} kg`}</div>)}</div>
+            <div className="flex gap-4 text-sm"><button onClick={()=>setView(view===trip.id?'':trip.id)} className="text-primary underline">Ver mapa por tramo</button>{canSchedule&&<><button onClick={()=>setEditing(structuredClone(trip))} className="text-primary underline">Editar / añadir recolección</button><button disabled={busy} onClick={()=>remove(trip)} className="text-danger underline">Cancelar viaje</button></>}{canOperate&&trip.stops.some(s=>!s.completedAt)&&<button onClick={()=>{setConfirm(trip);setScale(['','','']);setReference('');setReceived(Object.fromEntries(trip.cargo.filter(c=>c.kind==='product'&&c.unloadStopId===trip.stops.find(s=>!s.completedAt)?.id).map(c=>[c.id,c.boxes])));}} className="text-primary underline">Confirmar siguiente parada</button>}</div>
+            {view===trip.id&&<TripLoadMap plan={trip} products={products} clients={clients}/>}
+        </article>)}</div>
+        {legacy.length>0&&<details className="border border-border rounded-xl p-3"><summary>Fletes anteriores ({legacy.length} asignaciones)</summary>{legacy.map(s=><div key={s.id} className="text-xs p-2">{s.scheduledDate} · {s.unitLabel} · {s.quantity} cjs · {clients.find(c=>c.id===s.proyeccion?.clientId)?.nombre}{canSchedule&&<button className="text-danger underline ml-3" onClick={async()=>{if(!window.confirm('¿Retirar esta unidad anterior y liberar sus cajas?'))return;const r=await supabase.rpc('remove_consolidated_load',{p_schedule_id:s.id});if(r.error)setError(r.error.message);else await refresh();}}>Retirar unidad anterior</button>}</div>)}</details>}
+        <h3 className="font-bold text-primary">Unidades sugeridas · cajas pendientes de asignar</h3>
+        {days.map(day=><div key={day.dateString} className="space-y-2"><h4 className="font-bold text-sm">{day.name} {day.formatted}</h4>
+            {[...new Set(goals.map(g=>g.proyectoId))].map(projectId=>{
+                const group=goals.filter(g=>g.proyectoId===projectId), taken=Object.fromEntries(group.map(g=>[g.id,booked[`${g.id}:${day.dateString}`]||0]));
+                const proposed=suggestTrips(group,day.dateString,products,types,taken);
+                return <div key={projectId} className="grid md:grid-cols-2 gap-2">{proposed.suggestions.map((trip,i)=><button type="button" disabled={!canSchedule} key={i} onClick={()=>setEditing(hydrate(trip))} className="text-left border border-primary/20 rounded-xl p-3 bg-surface enabled:hover:bg-primary/5"><strong>1 {trip.equipment.name} · {projects.find(p=>p.id===projectId)?.nombre}</strong>{trip.cargo.map(c=><div className="text-xs" key={c.id}>{clients.find(t=>t.id===c.clientId)?.nombre} · {c.description}: {c.boxes} cajas</div>)}<span className="text-primary text-xs">Cambiar unidad / cantidades y programar</span></button>)}{proposed.issues.map(issue=><p className="text-amber-700 text-xs" key={issue}>{projects.find(p=>p.id===projectId)?.nombre}: {issue}</p>)}</div>;
+            })}
+        </div>)}
+        {canSchedule&&types.length>0&&<button className="text-primary underline" onClick={()=>setEditing({ ...initialTrip([],days[2]?.dateString||days[0].dateString,types[0]), stops: [{id:crypto.randomUUID(),name:'Recolección',address:'',at:`${days[2]?.dateString||days[0].dateString}T08:00`},{id:crypto.randomUUID(),name:'Entrega',address:'',at:`${days[2]?.dateString||days[0].dateString}T18:00`}] })}>Nuevo viaje / carga especial sin metas</button>}
+        {editing&&<TripPlanEditor initial={editing} goals={goals} projects={projects} products={products} clients={clients} types={types} carriers={carriers} requests={data.requests} booked={Object.fromEntries(Object.entries(booked).map(([k,v])=>[k,v-editing.cargo.filter(c=>`${c.projectionId}:${editing.stops.find(s=>s.id===c.loadStopId)?.at.slice(0,10)}`===k&&!!editing.id).reduce((n,c)=>n+c.boxes,0)]))} onClose={()=>setEditing(null)} onSaved={refresh}/>}
+        {confirm&&<div className="border border-primary rounded-xl p-4 bg-surface space-y-3"><strong>Confirmar operaciones en {confirm.stops.find(s=>!s.completedAt)?.name}</strong><p className="text-xs">Confirma las cargas y descargas efectivas según este plan. Los productos deben tener sus cajas registradas en Embarques. Para salir con carga se requiere pesaje por grupos de ejes, geometría completa y referencia de báscula.</p><div className="flex gap-2">{scale.map((s,i)=><label key={i}>{['Dirección lb','Motrices lb','Caja lb'][i]}<input type="number" className="border border-border p-2 bg-background rounded w-full" value={s} onChange={e=>setScale(scale.map((n,j)=>i===j?e.target.value:n))}/></label>)}</div>{confirm.cargo.filter(c=>c.kind==='product'&&c.unloadStopId===confirm.stops.find(s=>!s.completedAt)?.id).map(c=><label className="block text-sm" key={c.id}>Cajas realmente recibidas · {c.description} / {clients.find(t=>t.id===c.clientId)?.nombre}<input type="number" min="0" max={c.boxes} step="1" className="border border-border rounded p-2 bg-background" value={received[c.id]??''} onChange={e=>setReceived({...received,[c.id]:Number(e.target.value)})}/></label>)}<input placeholder="Referencia de báscula / recepción" className="border border-border rounded p-2 bg-background w-full" value={reference} onChange={e=>setReference(e.target.value)}/><button disabled={busy} onClick={confirmStop} className="bg-primary text-white rounded px-4 py-2">Confirmar parada real</button><button className="ml-4" onClick={()=>setConfirm(null)}>Cerrar</button></div>}
+    </section>;
+}

@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { LiderProgramacionUsaReport, ProductoDB, ProyectoDB, ProductQuantity, StrategicProjection, TipoUnidad } from '../types';
 import { PlusIcon, TrashIcon, BoxIcon, SwitchHorizontalIcon } from './icons';
 import { getTipoUnidadCapacity, getTipoUnidadName, toCamelCase } from '../utils/formatters';
+import { fiscalPeriod } from '../utils/commercialPlanning';
 
 const MANUAL_PROJECT_OPTION = '__MANUAL_PROJECT__';
 const MANUAL_PRODUCT_OPTION = '__MANUAL_PRODUCT__';
@@ -120,16 +121,18 @@ const LiderProgramacionUsaForm: React.FC<LiderProgramacionUsaFormProps> = ({
     }, []);
 
     useEffect(() => {
-        if (formData.semanaFiscal) {
-            // Opción B: Bolsa Global de Cajas.
-            // Ignoramos de qué sede (proyecto) es el lider, traemos todas las metas autorizadas de la semana.
-            supabase.from('proyecciones_estrategicas')
+        let active = true;
+        setWeeklyGoals([]);
+        if (formData.semanaFiscal && formData.projectId && formData.projectId !== MANUAL_PROJECT_OPTION) {
+            // Commercial demand belongs to the selected packing project and client.
+            let query = supabase.from('proyecciones_estrategicas')
                 .select('producto_id, proyeccion_cajas')
                 .eq('semana_fiscal', formData.semanaFiscal)
-                .eq('autorizado', true)
-                .then(({ data, error }) => {
-                    if (!error && data) {
-                        // Agrupar por producto para sumar las proyecciones de todos los empaques
+                .eq('planning_year', fiscalPeriod(formData.fechaSalida ? new Date(formData.fechaSalida) : new Date()).year)
+                .eq('proyecto_id', formData.projectId);
+            if (formData.clientId) query = query.eq('client_id', formData.clientId);
+            query.then(({ data, error }) => {
+                    if (active && !error && data) {
                         const aggregated: Record<string, number> = {};
                         data.forEach((d: any) => {
                             aggregated[d.producto_id] = (aggregated[d.producto_id] || 0) + (d.proyeccion_cajas || 0);
@@ -142,14 +145,15 @@ const LiderProgramacionUsaForm: React.FC<LiderProgramacionUsaFormProps> = ({
                                 productoId: prodId,
                                 nombreProducto: spec ? spec.nombreDelProducto : 'Producto',
                                 metaTotal: total,
-                                cantidadRestante: total // Cajas disponibles en la pool global
+                                cantidadRestante: total
                             };
                         });
                         setWeeklyGoals(goals);
                     }
                 });
         }
-    }, [formData.semanaFiscal, productSpecs]);
+        return () => { active = false; };
+    }, [formData.semanaFiscal, formData.projectId, formData.clientId, formData.fechaSalida, productSpecs]);
 
     useEffect(() => {
         if (initialData) {
@@ -291,7 +295,7 @@ const LiderProgramacionUsaForm: React.FC<LiderProgramacionUsaFormProps> = ({
                     const submissionData = {
                         ...formData,
                         projectId: formData.projectId === MANUAL_PROJECT_OPTION ? '' : formData.projectId,
-                        proyecto: formData.projectId === MANUAL_PROJECT_OPTION ? (formData.proyecto || '').trim() : formData.proyecto,
+                        proyecto: formData.projectId === MANUAL_PROJECT_OPTION ? (Array.isArray(formData.proyecto) ? formData.proyecto.join(' / ') : formData.proyecto || '').trim() : formData.proyecto,
                         productos: (formData.productos || []).map((prod) => ({
                             ...prod,
                             productId: prod.productId === MANUAL_PRODUCT_OPTION ? '' : prod.productId,
@@ -349,7 +353,7 @@ const LiderProgramacionUsaForm: React.FC<LiderProgramacionUsaFormProps> = ({
 
                                 {formData.projectId && formData.projectId !== MANUAL_PROJECT_OPTION && (
                                     <div className="space-y-3 animate-fade-in pt-2">
-                                        <h4 className="text-[10px] font-black text-primary uppercase tracking-widest border-b border-primary/5 pb-2">Metas Autorizadas (Semana {formData.semanaFiscal})</h4>
+                                        <h4 className="text-[10px] font-black text-primary uppercase tracking-widest border-b border-primary/5 pb-2">Solicitud de Comercial (Semana {formData.semanaFiscal})</h4>
                                         <div className="space-y-2">
                                             {weeklyGoals.map((goal, idx) => (
                                                 <div key={idx} className="flex items-center justify-between p-3 bg-white border border-border rounded-xl shadow-sm group hover:border-primary/30 transition-all">
@@ -357,7 +361,7 @@ const LiderProgramacionUsaForm: React.FC<LiderProgramacionUsaFormProps> = ({
                                                         <div className="p-1.5 bg-primary/5 rounded-lg text-primary"><BoxIcon className="w-3.5 h-3.5" /></div>
                                                         <div>
                                                             <p className="text-[11px] font-black text-primary uppercase leading-none">{goal.nombreProducto}</p>
-                                                            <p className="text-[9px] text-text-muted font-bold mt-1">Por programar: {goal.cantidadRestante.toLocaleString()} cjs</p>
+                                                            <p className="text-[9px] text-text-muted font-bold mt-1">Requeridas: {goal.metaTotal.toLocaleString()} cjs</p>
                                                         </div>
                                                     </div>
                                                     <button type="button" onClick={() => handleUseRemainder(goal)} className="px-3 py-1 border border-primary/30 text-[9px] font-black text-primary rounded-lg uppercase hover:bg-primary hover:text-white transition-all">Programar</button>

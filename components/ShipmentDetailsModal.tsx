@@ -17,6 +17,7 @@ interface ShipmentDetailsModalProps {
     proyectos: ProyectoDB[];
     clientes: ClienteDB[];
     logisticStatuses: EstatusDB[];
+    canManage?: boolean;
     onCompleteTrip: (id: string) => void;
     onRefresh?: () => void; 
 }
@@ -33,7 +34,7 @@ const formatFullSafeDate = (dateStr: string | undefined | null) => {
     return isNaN(date.getTime()) ? 'Fecha inválida' : date.toLocaleString('es-MX', { dateStyle: 'long', timeStyle: 'short' });
 };
 
-const ShipmentDetailsModal: React.FC<ShipmentDetailsModalProps> = ({ isOpen, onClose, report, productSpecs, proyectos, clientes, logisticStatuses, onCompleteTrip, onRefresh }) => {
+const ShipmentDetailsModal: React.FC<ShipmentDetailsModalProps> = ({ isOpen, onClose, report, productSpecs, proyectos, clientes, logisticStatuses, canManage = true, onCompleteTrip, onRefresh }) => {
     const [tiveHistory, setTiveHistory] = useState<TiveEvent[]>([]);
     const [dbAlerts, setDbAlerts] = useState<any[]>([]);
     const [dictionary, setDictionary] = useState<Record<string, TiveAlertTranslation>>({});
@@ -105,7 +106,7 @@ const ShipmentDetailsModal: React.FC<ShipmentDetailsModalProps> = ({ isOpen, onC
         
         const origin = proyectos.find(p => p.id === report.projectId)?.nombre || report.project || 'S/D';
         const stopOver = report.isConsolidated ? (proyectos.find(p => p.id === report.stopOverProjectId)?.nombre || 'Escala Técncia') : null;
-        const dest = clientes.find(c => c.id === report.clientId)?.nombre || 'S/D';
+        const dest = (report.clientIds?.length ? report.clientIds : [report.clientId]).map(id=>clientes.find(c=>c.id===id)?.nombre).filter(Boolean).join(' / ') || 'S/D';
         const line = formatCarrierName(lineas.find(l => l.id === report.lineaTransportistaId)?.nombre || 'S/A');
         const logoUrl = "https://sucvgevhsmxrpkpvrblm.supabase.co/storage/v1/object/public/storage/logong.jpeg";
 
@@ -357,6 +358,7 @@ const ShipmentDetailsModal: React.FC<ShipmentDetailsModalProps> = ({ isOpen, onC
     }, [tiveHistory, report.incidents, dbAlerts]);
 
     const handleStatusChange = async (newStatus: string) => {
+        if (!canManage) return;
         setCurrentStatus(newStatus);
         
         let updateData: any = { logistic_status: newStatus };
@@ -420,9 +422,9 @@ const ShipmentDetailsModal: React.FC<ShipmentDetailsModalProps> = ({ isOpen, onC
     }, [report, productSpecs, tiveHistory, mainProductSpec]);
 
     const routeVisualInfo = useMemo(() => {
-        const origin = proyectos.find(p => p.id === report.projectId);
+        const origin = proyectos.find(p => p.id === report.projectId) || {nombre:report.project};
         const stopOver = proyectos.find(p => p.id === report.stopOverProjectId);
-        const destination = clientes.find(c => c.id === report.clientId);
+        const destination = {nombre:(report.clientIds?.length ? report.clientIds : [report.clientId]).map(id=>clientes.find(c=>c.id===id)?.nombre).filter(Boolean).join(' / ') || 'S/D'};
         
         const e1Products: any[] = [];
         const e2Products: any[] = [];
@@ -543,10 +545,11 @@ const ShipmentDetailsModal: React.FC<ShipmentDetailsModalProps> = ({ isOpen, onC
                         <div className="bg-white/10 p-2 rounded-xl border border-white/20 flex flex-col gap-1">
                             <span className="text-[8px] font-black uppercase tracking-widest text-white/70">Control de Estatus</span>
                             <select 
-                                value={currentStatus} 
+                                value={currentStatus} disabled={!canManage}
                                 onChange={(e) => handleStatusChange(e.target.value)} 
                                 className="bg-transparent text-white font-black text-[11px] border-none outline-none cursor-pointer uppercase"
                             >
+                                {!logisticStatuses.some(s=>s.nombre===currentStatus) && <option value={currentStatus}>{currentStatus}</option>}
                                 {logisticStatuses.map(s => <option key={s.id} value={s.nombre} className="text-primary">{s.nombre}</option>)}
                             </select>
                         </div>
@@ -889,7 +892,7 @@ const ShipmentDetailsModal: React.FC<ShipmentDetailsModalProps> = ({ isOpen, onC
 
                 <div className="p-6 border-t border-border bg-white flex justify-end gap-3 shrink-0 pb-[calc(1rem+env(safe-area-inset-bottom))] md:pb-6">
                     <button onClick={onClose} className="px-6 py-2.5 rounded-xl border border-border font-bold text-text-secondary hover:bg-hover transition-all text-sm">Cerrar</button>
-                    {currentStatus !== 'Finalizado' && (
+                    {canManage && currentStatus !== 'Finalizado' && (
                         <button onClick={() => onCompleteTrip(report.id)} className="px-8 py-2.5 rounded-xl bg-success text-white font-black text-xs uppercase tracking-widest hover:bg-green-700 shadow-lg">Finalizar Viaje</button>
                     )}
                 </div>

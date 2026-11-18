@@ -154,7 +154,7 @@ const COMMON_SUBTABS_CONFIG = {
             { key: 'puedeConsolidar', name: 'Consolida', type: 'boolean', headerClassName: 'w-16 text-center' },
             { key: 'aliasUsa', name: 'Alias USA', group: 'Nombres', groupClassName: 'bg-primary text-primary-content', hideInTable: true },
             { key: 'configUsa', name: 'Configuración', group: 'Especificaciones', groupClassName: 'bg-accent text-white', hideInTable: true },
-            { key: 'pesoUsa', name: 'Peso Neto (kg)', group: 'Especificaciones', type: 'number', hideInTable: true },
+            { key: 'pesoUsa', name: 'Peso por caja (kg)', group: 'Especificaciones', type: 'number', hideInTable: true },
             { key: 'color', name: 'Color', group: 'Insumos', type: 'color', groupClassName: 'bg-success text-white', hideInTable: true },
             { key: 'nombreInsumo', name: 'Insumo (Caja)', group: 'Insumos', hideInTable: true },
             { key: 'gastoCaja', name: 'Gasto Caja ($)', group: 'Insumos', type: 'number', hideInTable: true },
@@ -194,8 +194,8 @@ const DATABASE_CONFIG: { [key: string]: MainTabInfo } = {
         name: 'Estados Unidos',
         subTabs: {
             proyecto: { ...COMMON_SUBTABS_CONFIG.proyecto, table: 'usa_proyectos' },
-            productos: { ...COMMON_SUBTABS_CONFIG.productos, table: 'usa_productos' },
-            clientes: { ...COMMON_SUBTABS_CONFIG.clientes, table: 'usa_clientes' },
+            productos: { ...COMMON_SUBTABS_CONFIG.productos, table: 'usa_productos', columns: [...COMMON_SUBTABS_CONFIG.productos.columns, { key: 'pesoIncluyeEmpaque', name: 'Peso incluye empaque', type: 'boolean', group: 'Especificaciones', hideInTable: true }, { key: 'empaqueKg', name: 'Empaque por caja (kg)', type: 'number', group: 'Especificaciones', hideInTable: true }] },
+            clientes: { ...COMMON_SUBTABS_CONFIG.clientes, table: 'usa_clientes', columns: [...COMMON_SUBTABS_CONFIG.clientes.columns, { key: 'activo', name: 'Activo', type: 'boolean' }] },
             lineas_transporte: {
                 name: 'Líneas Transporte',
                 table: 'usa_lineas_transporte',
@@ -209,7 +209,13 @@ const DATABASE_CONFIG: { [key: string]: MainTabInfo } = {
                 table: 'tipo_unidad',
                 columns: [
                     { key: 'unidad', name: 'Tipo de Unidad' },
-                    { key: 'capacidad', name: 'Capacidad Configurada' }
+                    { key: 'capacidad', name: 'Capacidad Configurada' },
+                    { key: 'cargaUtilLb', name: 'Carga útil (lb)', type: 'number' },
+                    { key: 'pesoBrutoMaxLb', name: 'Peso bruto máximo (lb)', type: 'number' },
+                    { key: 'taraPalletKg', name: 'Tara pallet (kg)', type: 'number' },
+                    { key: 'refrigerada', name: 'Refrigerada', type: 'boolean' },
+                    { key: 'temperaturaMinF', name: 'Temperatura mínima °F', type: 'number' },
+                    { key: 'temperaturaMaxF', name: 'Temperatura máxima °F', type: 'number' }
                 ]
             },
             unidades_transporte: {

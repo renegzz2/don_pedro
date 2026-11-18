@@ -2,12 +2,17 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { supabase } from '../lib/supabase';
-import { User, UserRole, StrategicProjection, ProyectoDB, ProductoDB, TipoUnidad, LiderProgramacionUsaReport, ClienteDB, LineaTransporteDB, UnidadTransporteDB } from '../types';
+import { User, UserRole, StrategicProjection, ProyectoDB, ProductoDB, TipoUnidad, ClienteDB, LineaTransporteDB, UnidadTransporteDB } from '../types';
 import { BoxIcon, TruckIcon, PencilIcon, PlusIcon, TrashIcon, DownloadIcon, ExclamationIcon, SwitchHorizontalIcon, MenuIcon } from './icons';
 import { formatCarrierName, getTipoUnidadCapacity, getTipoUnidadName, toCamelCase, toSnakeCase } from '../utils/formatters';
 import { useNotification } from './NotificationProvider';
 import ConfirmModal from './ConfirmModal';
 import StaffOnDuty from './StaffOnDuty';
+import { usePlanningMetrics, metricBoxes } from '../hooks/usePlanningMetrics';
+import { fromUnit } from '../utils/tripPlanning';
+import type { TransportSpec } from '../transportTypes';
+import { useCommercialPlanning } from '../hooks/useCommercialPlanning';
+import { commercialQuantityForDay, fiscalPeriod, localDateKey, requestedGoalPeriod, defaultGoalDay } from '../utils/commercialPlanning';
 
 interface StrategicPlanningPageProps {
     user: User;
@@ -20,10 +25,7 @@ interface StrategicPlanningPageProps {
     defaultTab?: 'projection' | 'daily';
 }
 
-interface UnitWithCap {
-    name: string;
-    capacity: number;
-}
+type UnitWithCap = TransportSpec;
 
 const getWeekNumber = (d: Date): number => {
     const date = new Date(d.getTime());
@@ -46,7 +48,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
     const { addNotification } = useNotification();
     const [activeTab, setActiveTab] = useState<'projection' | 'daily'>(defaultTab);
     const [activeWeek, setActiveWeek] = useState<number>(getCurrentWeek());
-    const [viewMode, setViewMode] = useState<'cajas' | 'camiones'>(initialViewMode);
+    const [viewMode, setViewMode] = useState<'cajas' | 'camiones'>('cajas');
     const [isLogisticMode, setIsLogisticMode] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
 
@@ -57,8 +59,6 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
     const [unitTypes, setUnitTypes] = useState<UnitWithCap[]>([]);
     const [lineas, setLineas] = useState<LineaTransporteDB[]>([]);
     const [unidades, setUnidades] = useState<UnidadTransporteDB[]>([]);
-    const [lotes, setLotes] = useState<LiderProgramacionUsaReport[]>([]);
-    const [realStats, setRealStats] = useState<Record<string, number>>({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState<string | null>(null);
 
@@ -67,9 +67,13 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
 
     const [isNewGoalModalOpen, setIsNewGoalModalOpen] = useState(false);
     const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
+    const [savingGoal, setSavingGoal] = useState(false);
     const [newGoalData, setNewGoalData] = useState({
         proyectoId: '',
         productoId: '',
+        clientId: '',
+        proyeccionCajas: 0,
+        requestedDate: localDateKey(),
         ng2025: 0,
         presupuestoMonetario: 0,
         ss2025: 0
@@ -99,11 +103,21 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
     const permissions = useMemo(() => ({
         isLogistics: [UserRole.GERENCIA, UserRole.SUBGERENCIA, UserRole.COORDINADOR, UserRole.DIRECCION, UserRole.SUBDIRECCION, UserRole.ADMINISTRADOR].includes(user.role),
         canApprove: [UserRole.SUBDIRECCION, UserRole.DIRECCION, UserRole.ADMINISTRADOR].includes(user.role),
-        canEditGoals: [UserRole.SUBDIRECCION, UserRole.DIRECCION, UserRole.ADMINISTRADOR].includes(user.role) && !isCoordinatorView,
-        canRegisterRealSales: [UserRole.LIDER_PROYECTO, UserRole.SUBDIRECCION, UserRole.COORDINADOR, UserRole.ADMINISTRADOR].includes(user.role)
+        canEditGoals: [UserRole.COMERCIAL, UserRole.SUBDIRECCION, UserRole.DIRECCION, UserRole.ADMINISTRADOR].includes(user.role) && !isCoordinatorView
     }), [user.role, isCoordinatorView]);
 
-    const planningYear = useMemo(() => new Date().getFullYear(), []);
+    const [planningYear,setPlanningYear] = useState(fiscalPeriod().year);
+    const freightPlanning = useCommercialPlanning(activeWeek, planningYear);
+    const [historyYear, setHistoryYear] = useState(planningYear - 1);
+    const metrics = usePlanningMetrics(planningYear, activeWeek, historyYear);
+    const [historyClientId, setHistoryClientId] = useState('');
+    const historicalClient = clientes.find(c => c.id === historyClientId);
+    useEffect(() => { if (!clientes.some(c => c.id === historyClientId && c.activo !== false)) setHistoryClientId(clientes.find(c => c.activo !== false)?.id || ''); }, [clientes, historyClientId]);
+    const boxValue = (p: StrategicProjection, concept: string) => metrics.error || metrics.loading ? null : metricBoxes(metrics.rows, p, concept, historyClientId);
+    const boxLabel = (n: number | null) => n == null ? '—' : n.toLocaleString();
+    useEffect(() => {
+        if (!freightPlanning.loading && !freightPlanning.error) setProjections(freightPlanning.goals);
+    }, [freightPlanning.goals, freightPlanning.loading, freightPlanning.error]);
 
     const weekStartDate = useMemo(() => {
         const d = new Date(planningYear, 0, 1 + (activeWeek - 1) * 7);
@@ -157,7 +171,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
     };
 
     useEffect(() => {
-        if (initialViewMode) setViewMode(initialViewMode);
+        setViewMode('cajas');
     }, [initialViewMode]);
 
     useEffect(() => {
@@ -193,20 +207,12 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
     const fetchData = useCallback(async () => {
         setLoading(true);
         try {
-            const year = planningYear;
-            const simpleStart = new Date(year, 0, 1 + (activeWeek - 2) * 7);
-            const simpleEnd = new Date(year, 0, 1 + (activeWeek + 1) * 7);
-
-            const [projRes, prodRes, cliRes, dataRes, unitsRes, lotesRes, shipmentRes, lineasRes, unidadesRes] = await Promise.all([
+            const [projRes, prodRes, cliRes, dataRes, unitsRes, lineasRes, unidadesRes] = await Promise.all([
                 supabase.from('usa_proyectos').select('*'),
                 supabase.from('usa_productos').select('*'),
                 supabase.from('usa_clientes').select('*'),
-                supabase.from('proyecciones_estrategicas').select('*').eq('semana_fiscal', activeWeek),
+                supabase.from('proyecciones_estrategicas').select('*').eq('semana_fiscal', activeWeek).eq('planning_year', planningYear),
                 supabase.from('tipo_unidad').select('*'),
-                supabase.from('lider_programacion_usa_reports').select('*').eq('semana_fiscal', activeWeek),
-                supabase.from('usa_shipment_reports').select('project_id, products, logistic_status, real_departure_date, departure_date_time')
-                    .or(`departure_date_time.gte.${simpleStart.toISOString()},real_departure_date.gte.${simpleStart.toISOString()}`)
-                    .or(`departure_date_time.lte.${simpleEnd.toISOString()},real_departure_date.lte.${simpleEnd.toISOString()}`),
                 supabase.from('usa_lineas_transporte').select('*').order('nombre'),
                 supabase.from('usa_unidades_transporte').select('*')
             ]);
@@ -214,41 +220,14 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
             if (projRes.data) setProyectos(toCamelCase(projRes.data));
             if (prodRes.data) setProductos(toCamelCase(prodRes.data));
             if (cliRes.data) setClientes(toCamelCase(cliRes.data));
-            if (lotesRes.data) setLotes(toCamelCase(lotesRes.data));
             if (lineasRes.data) setLineas(toCamelCase(lineasRes.data));
             if (unidadesRes.data) setUnidades(toCamelCase(unidadesRes.data));
-
-            const stats: Record<string, number> = {};
-            if (shipmentRes.data) {
-                shipmentRes.data.forEach((report: any) => {
-                    const departureDate = report.real_departure_date || report.departure_date_time;
-                    if (!departureDate) return;
-                    
-                    const d = new Date(departureDate);
-                    const weekOfDeparture = getWeekNumber(d);
-                    
-                    if (weekOfDeparture !== activeWeek) return;
-
-                    const prods = Array.isArray(report.products) ? report.products : [];
-                    prods.forEach((p: any) => {
-                        const pid = p.product_id || p.productId;
-                        const key = `${report.project_id}_${pid}`;
-                        const realQty = Number(p.real_qty || p.realQty || p.quantity || 0);
-                        stats[key] = (stats[key] || 0) + realQty;
-                    });
-                });
-            }
-            setRealStats(stats);
 
             if (unitsRes.data) {
                 const rawUnits = toCamelCase(unitsRes.data) as TipoUnidad[];
                 const processedUnits: UnitWithCap[] = rawUnits.map(u => {
-                    const match = u.capacidad.match(/\d+/);
-                    return {
-                        name: u.focused || u.unidad,
-                        capacity: match ? parseInt(match[0]) : 0
-                    };
-                }).sort((a, b) => b.capacity - a.capacity);
+                    return fromUnit(u);
+                }).filter(u => u.capacity > 0 && u.name).sort((a, b) => b.capacity - a.capacity);
                 setUnitTypes(processedUnits);
             }
 
@@ -267,7 +246,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
         } finally {
             setLoading(false);
         }
-    }, [activeWeek]);
+    }, [activeWeek, planningYear]);
 
     useEffect(() => {
         fetchData();
@@ -338,6 +317,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
     };
 
     const handleOpenForm = (p: StrategicProjection) => {
+        if (!permissions.canEditGoals) return;
         if (!p.fechaSalida || p.fechaSalida === '') {
             const now = new Date();
             const year = now.getFullYear();
@@ -364,7 +344,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
     const handleCloseForm = () => { setIsFormOpen(false); setSelectedProjection(null); };
 
     const handleOpenNewGoal = () => {
-        setNewGoalData({ proyectoId: '', productoId: '', ng2025: 0, presupuestoMonetario: 0, ss2025: 0 });
+        setNewGoalData({ proyectoId: '', productoId: '', clientId: '', proyeccionCajas: 0, requestedDate: defaultGoalDay(planningYear,activeWeek), ng2025: 0, presupuestoMonetario: 0, ss2025: 0 });
         setEditingGoalId(null);
         setIsNewGoalModalOpen(true);
     };
@@ -373,7 +353,10 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
         setNewGoalData({
             proyectoId: p.proyectoId,
             productoId: p.productoId,
-            ng2025: (p as any).ng2025 || p.venta2025Referencia || 0,
+            clientId: p.clientId || '',
+            proyeccionCajas: p.proyeccionCajas || 0,
+            requestedDate: p.desgloseDiario?.[0]?.fecha?.slice(0, 10) || p.fechaSalida?.slice(0, 10) || localDateKey(),
+            ng2025: boxValue(p, 'ng_semana') ?? 0,
             presupuestoMonetario: p.presupuestoMonetario,
             ss2025: (p as any).ss2025 || p.precioCompra2025 || 0
         });
@@ -398,19 +381,32 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
     };
 
     const handleCreateGoal = async () => {
-        if (!newGoalData.proyectoId || !newGoalData.productoId) {
-            addNotification({ type: 'warning', title: 'Campos incompletos', message: 'Seleccione Proyecto y Producto.' });
+        if (savingGoal || !permissions.canEditGoals) return;
+        if (!newGoalData.proyectoId || !newGoalData.productoId || !newGoalData.clientId || newGoalData.proyeccionCajas <= 0 || !Number.isInteger(newGoalData.proyeccionCajas)) {
+            addNotification({ type: 'warning', title: 'Campos incompletos', message: 'Seleccione proyecto, producto, cliente y una cantidad de cajas entera y positiva.' });
             return;
         }
+        let requestedPeriod: ReturnType<typeof fiscalPeriod>;
+        try {
+            const existing = projections.find(p=>p.id===editingGoalId);
+            const originalDay = existing?.desgloseDiario?.[0]?.fecha?.slice(0,10) || existing?.fechaSalida?.slice(0,10);
+            requestedPeriod = requestedGoalPeriod(newGoalData.requestedDate,localDateKey(),originalDay);
+        } catch (error: any) {
+            addNotification({type:'warning',title:'Fecha de carga',message:error.message});return;
+        }
+        setSavingGoal(true);
         try {
             const payload = {
-                semana_fiscal: activeWeek,
+                semana_fiscal: requestedPeriod.week,
+                planning_year: requestedPeriod.year,
                 canal_venta: 'USA',
                 proyecto_id: newGoalData.proyectoId,
                 producto_id: newGoalData.productoId,
-                ng_2025: newGoalData.ng2025,
-                presupuesto_monetario: newGoalData.presupuestoMonetario,
-                ss_2025: newGoalData.ss2025,
+                client_id: newGoalData.clientId,
+                proyeccion_cajas: newGoalData.proyeccionCajas,
+                ...((projections.find(p => p.id === editingGoalId)?.desgloseDiario?.length || 0) > 1 ? {} : { fecha_salida: `${newGoalData.requestedDate}T08:00`, desglose_diario: [{ fecha: `${newGoalData.requestedDate}T08:00`, cantidad: newGoalData.proyeccionCajas }] }),
+                ...(!editingGoalId ? { packing_plan: [] } : {}),
+                ...(!editingGoalId ? { ng_2025: 0, ss_2025: 0, presupuesto_monetario: 0 } : {}),
                 comentarios_rechazo: null
             };
             if (editingGoalId) {
@@ -419,7 +415,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                 setProjections(prev => prev.map(p => p.id === editingGoalId ? { ...p, ...newGoalData, comentariosRechazo: undefined } : p));
                 addNotification({ type: 'success', title: 'Meta Actualizada', message: 'Los cambios han sido guardados.' });
             } else {
-                const insertPayload = { ...payload, proyeccion_cajas: 0, autorizado: false };
+                const insertPayload = { ...payload, autorizado: true };
                 const { data, error } = await supabase.from('proyecciones_estrategicas').insert(insertPayload).select();
                 if (error) throw error;
                 if (data) {
@@ -430,28 +426,33 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                 }
             }
             setIsNewGoalModalOpen(false);
+            if (requestedPeriod.week !== activeWeek || requestedPeriod.year !== planningYear) {
+                setPlanningYear(requestedPeriod.year);setActiveWeek(requestedPeriod.week);
+            } else { await fetchData();await freightPlanning.refresh(); }
         } catch (error: any) {
-            addNotification({ type: 'danger', title: 'Error', message: 'Operación fallida. Verifique conexión.' });
-        }
+            addNotification({ type: 'danger', title: 'Error', message: error.message || 'No se pudo guardar la meta.' });
+        } finally { setSavingGoal(false); }
     };
 
     const exportToCSV = () => {
         if (filteredProjections.length === 0) return;
-        const headers = ["Proyecto", "Producto", "NG 2025", "SS 2025", "Presupuesto CJS", "Proyección Actual", "Real Enviado", "Estatus"];
+        const headers = ["Proyecto", "Producto", "Cliente de meta", `NG ${historyYear} (cajas enviadas, semana ${activeWeek})`, `${historicalClient?.nombre || "Cliente"} ${historyYear} (cajas enviadas, semana ${activeWeek})`, `Enviado ${planningYear} (cajas)`, "Proyección Actual", "Real Enviado", "Estatus"];
         const rows = filteredProjections.map(p => {
-            const real = realStats[`${p.proyectoId}_${p.productoId}`] || 0;
+            const real = boxValue(p, 'real_meta') || 0;
             return [
                 proyectos.find(pj => pj.id === p.proyectoId)?.nombre || '',
                 productos.find(pd => pd.id === p.productoId)?.nombreDelProducto || '',
-                (p as any).ng2025 || p.venta2025Referencia || 0,
-                (p as any).ss2025 || p.precioCompra2025 || 0,
-                p.presupuestoMonetario,
+                clientes.find(c=>c.id===p.clientId)?.nombre || '',
+                boxValue(p, 'ng_semana') ?? '',
+                boxValue(p, 'cliente_enviado_semana') ?? '',
+                boxValue(p, 'enviado_anual'),
                 p.proyeccionCajas,
                 real,
                 p.autorizado ? 'AUTORIZADO' : p.comentariosRechazo ? 'RECHAZADO' : 'PENDIENTE'
             ]
         });
-        const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+        const csvCell = (v: unknown) => '"' + String(v ?? '').replaceAll('"', '""') + '"';
+        const csvContent = "data:text/csv;charset=utf-8," + [headers.map(csvCell).join(","), ...rows.map(e => e.map(csvCell).join(","))].join("\n");
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement("a");
         link.setAttribute("href", encodedUri);
@@ -465,17 +466,18 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
     const handleExportPDF = () => {
         addNotification({ type: 'info', title: 'Generando Reporte', message: 'Preparando matriz estratégica para móviles...' });
 
+        const htmlEscape = (v: unknown) => String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
         let rowsHtml = '';
         filteredProjections.forEach(p => {
-            const projName = proyectos.find(pj => pj.id === p.proyectoId)?.nombre || 'S/D';
-            const prodName = productos.find(pd => pd.id === p.productoId)?.nombreDelProducto || 'S/D';
-            const real = realStats[`${p.proyectoId}_${p.productoId}`] || 0;
+            const projName = htmlEscape(proyectos.find(pj => pj.id === p.proyectoId)?.nombre || 'S/D');
+            const prodName = htmlEscape(productos.find(pd => pd.id === p.productoId)?.nombreDelProducto || 'S/D');
+            const real = boxValue(p, 'real_meta') || 0;
             rowsHtml += `
                 <tr>
-                    <td style="padding: 10px; border: 1px solid #ddd; font-weight: bold;">${projName} / ${prodName}</td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center; color: #002D62; font-weight: bold;">$${((p as any).ng2025 || p.venta2025Referencia || 0).toLocaleString()}</td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">$${((p as any).ss2025 || p.precioCompra2025 || 0).toLocaleString()}</td>
-                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${p.presupuestoMonetario.toLocaleString()}</td>
+                    <td style="padding: 10px; border: 1px solid #ddd; font-weight: bold;">${projName} / ${htmlEscape(clientes.find(c=>c.id===p.clientId)?.nombre || 'Sin cliente')} / ${prodName}</td>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center; color: #002D62; font-weight: bold;">${boxLabel(boxValue(p, 'ng_semana'))}</td>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${boxLabel(boxValue(p, 'cliente_enviado_semana'))}</td>
+                    <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${boxLabel(boxValue(p, 'enviado_anual'))}</td>
                     <td style="padding: 10px; border: 1px solid #ddd; text-align: center; font-weight: 900; background-color: #f1f5f9;">${p.proyeccionCajas.toLocaleString()}</td>
                     <td style="padding: 10px; border: 1px solid #ddd; text-align: center; font-weight: 900; background-color: #f0fdf4; color: #16a34a;">${real.toLocaleString()}</td>
                     <td style="padding: 10px; border: 1px solid #ddd; text-align: center;">${p.autorizado ? 'AUTORIZADO' : p.comentariosRechazo ? 'RECHAZADO' : 'PENDIENTE'}</td>
@@ -503,10 +505,10 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                     <table>
                         <thead>
                             <tr>
-                                <th>Proyecto / Producto</th>
-                                <th>NG 2025</th>
-                                <th>SS 2025</th>
-                                <th>Presupuesto</th>
+                                <th>Proyecto / Cliente / Producto</th>
+                                <th>NG ${historyYear} · Semana ${activeWeek}</th>
+                                <th>${htmlEscape(historicalClient?.nombre || 'Cliente')} ${historyYear} · Semana ${activeWeek}</th>
+                                <th>Presupuesto (cajas enviadas)</th>
                                 <th>Proyección</th>
                                 <th>Real Enviado</th>
                                 <th>Estatus</th>
@@ -560,7 +562,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                 return projName.includes(q) || prodName.includes(q);
             });
         }
-        if (isCoordinatorView) return base.filter(p => p.autorizado === true && p.proyeccionCajas > 0);
+        if (isCoordinatorView) return base.filter(p => p.proyeccionCajas > 0 && !!p.clientId);
 
         base.sort((a, b) => {
             const orderA = manualOrder[a.id] ?? 999999;
@@ -595,37 +597,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
         return Number(projection.proyeccionCajas) || 0;
     };
 
-    const programacionUsa = useMemo(() => {
-        const map: Record<string, { sal: Record<string, number>, eta: Record<string, number> }> = {};
-        
-        lotes.forEach(l => {
-            const pId = l.projectId;
-            if (!pId) return;
 
-            const salDate = l.fechaSalida ? l.fechaSalida.split('T')[0] : null;
-            let etaDate = l.fechaLlegada ? l.fechaLlegada.split('T')[0] : null;
-
-            if (!etaDate && salDate) {
-                const project = proyectos.find(p => p.id === pId);
-                let transitHours = project?.tiempoOptimo || 72;
-                const d = new Date(salDate + 'T12:00:00Z');
-                d.setTime(d.getTime() + (transitHours * 60 * 60 * 1000));
-                etaDate = d.toISOString().split('T')[0];
-            }
-
-            (l.productos || []).forEach(prod => {
-                const prId = prod.productId || prod.product_id;
-                const key = `${pId}_${prId}`;
-                if (!map[key]) map[key] = { sal: {}, eta: {} };
-
-                const qty = Number(prod.quantity) || 0;
-                if (salDate) map[key].sal[salDate] = (map[key].sal[salDate] || 0) + qty;
-                if (etaDate) map[key].eta[etaDate] = (map[key].eta[etaDate] || 0) + qty;
-            });
-        });
-        
-        return map;
-    }, [lotes, proyectos]);
 
     return (
         <div className="p-4 md:p-6 animate-fade-in space-y-6 pb-20">
@@ -679,13 +651,6 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                             )}
                         </div>
 
-                        {permissions.isLogistics && !hideViewSelector && activeTab === 'daily' && (
-                            <div className="flex bg-surface-secondary rounded-lg p-1 border border-border">
-                                <button onClick={() => setViewMode('cajas')} className={`px-3 py-1.5 text-[10px] font-black uppercase rounded-md transition-all ${viewMode === 'cajas' ? 'bg-white text-primary shadow-sm' : 'text-text-secondary'}`}>Cajas</button>
-                                <button onClick={() => setViewMode('camiones')} className={`px-3 py-1.5 text-[10px] font-black uppercase rounded-md transition-all ${viewMode === 'camiones' ? 'bg-white text-primary shadow-sm' : 'text-text-secondary'}`}>Unidades</button>
-                            </div>
-                        )}
-
                         {activeTab === 'daily' && (
                             <button
                                 onClick={() => setIsLogisticMode(!isLogisticMode)}
@@ -697,13 +662,14 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                         )}
 
                         <div className="flex items-center bg-surface border border-border rounded-lg px-2">
-                            <span className="text-xs font-bold text-text-muted px-2 uppercase tracking-tighter">Semana</span>
-                            <input type="number" min={1} max={52} value={activeWeek} onChange={(e) => setActiveWeek(parseInt(e.target.value) || 1)} className="w-16 py-1.5 bg-transparent text-sm font-black text-center outline-none text-primary" />
+                            <label className="text-xs font-bold text-text-muted px-2">Año<input aria-label="Año de metas" type="number" min="2000" max="2200" value={planningYear} onChange={e=>setPlanningYear(Math.min(2200,Math.max(2000,Number(e.target.value)||2000)))} className="w-20 p-1.5 bg-transparent text-primary text-center"/></label><span className="text-xs font-bold text-text-muted px-2 uppercase tracking-tighter">Semana</span>
+                            <input type="number" min={1} max={53} value={activeWeek} onChange={(e) => setActiveWeek(Math.min(53, Math.max(1, parseInt(e.target.value) || 1)))} className="w-16 py-1.5 bg-transparent text-sm font-black text-center outline-none text-primary" />
                         </div>
                     </div>
                 </div>
                 <StaffOnDuty />
             </div>
+            {freightPlanning.error && <p role="alert" className="text-danger text-sm">{freightPlanning.error}</p>}
 
             {activeTab === 'projection' && (
                 <div className="space-y-4">
@@ -721,6 +687,21 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                             <button onClick={handleOpenNewGoal} className="bg-primary text-white px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest flex items-center gap-2 shadow-lg active:scale-95 transition-all"><PlusIcon className="w-4 h-4" /> Nueva Meta</button>
                         )}
                     </div>
+                    <div className="bg-surface rounded-xl border border-border p-4 space-y-3">
+                        <label className="text-sm font-bold">Cliente para comparar
+                            <select aria-label="Cliente para comparar histórico" className="border border-border rounded-lg p-2 ml-3 bg-background" value={historyClientId} onChange={e => setHistoryClientId(e.target.value)}>
+                                {clientes.filter(c => c.activo !== false).map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                            </select>
+                        </label>
+                        <label className="block text-sm font-bold">Año de consulta
+                            <select aria-label="Año de consulta del histórico" className="border border-border rounded-lg p-2 ml-3 bg-background" value={historyYear} onChange={e => setHistoryYear(Number(e.target.value))}>
+                                {Array.from({ length: planningYear - 1999 }, (_, i) => planningYear - i).map(year => <option key={year} value={year}>{year}</option>)}
+                            </select>
+                        </label>
+                        <p className="text-xs text-text-secondary">Semana {activeWeek} de {historyYear}: NG suma las cajas embarcadas del proyecto/producto a todos los clientes; la columna del cliente suma las cajas embarcadas al cliente seleccionado. Presupuesto: cajas enviadas durante {planningYear}. Real enviado: cajas de esta meta registradas por Embarques.</p>
+                        {metrics.error && <p role="alert" className="text-danger">{metrics.error}</p>}
+                        {metrics.loading && <p className="text-xs text-text-secondary">Consultando embarques de la semana y año seleccionados...</p>}
+                    </div>
                     <div className="bg-surface rounded-2xl border border-border overflow-hidden shadow-xl">
                         <div className="overflow-x-auto">
                             <DragDropContext onDragEnd={handleDragEnd}>
@@ -731,9 +712,9 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                 <tr className="divide-x divide-white/10">
                                                     <th className="w-8 px-2 bg-black/10"></th>
                                                     <th className={`px-4 py-1 sticky left-0 ${hideViewSelector ? 'bg-emerald-900' : 'bg-[#002D62]'} font-black uppercase w-48`}>Proyecto / Producto</th>
-                                                    <th className="px-4 py-1 text-center font-black uppercase">NG 2025</th>
-                                                    <th className="px-4 py-1 text-center font-black uppercase">SS 2025</th>
-                                                    <th className="px-4 py-1 text-center font-black uppercase">Presupuesto</th>
+                                                    <th className="px-4 py-1 text-center font-black uppercase">NG {historyYear}</th>
+                                                    <th className="px-4 py-1 text-center font-black uppercase">{historicalClient?.nombre || 'Cliente'} {historyYear}</th>
+                                                    <th className="px-4 py-1 text-center font-black uppercase">Presupuesto {planningYear}<span className="block text-[8px] font-normal">Cajas enviadas</span></th>
                                                     <th className="px-4 py-1 text-center font-black uppercase bg-blue-700 text-white border-b-2 border-white/20">Proyección</th>
                                                     <th className="px-4 py-1 text-center font-black uppercase bg-emerald-700 text-white border-b-2 border-white/20">Real Enviado</th>
                                                     <th className="px-4 py-1 text-center font-black uppercase">Estatus</th>
@@ -748,7 +729,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                     {filteredProjections.map((p, index) => {
                                                         const canjeProductos = (p.canjeProductos || []) as { productId: string; quantity: number }[];
                                                         const tieneCanjes = canjeProductos.length > 0 && canjeProductos.some(c => c.productId);
-                                                        const real = tieneCanjes ? 0 : (realStats[`${p.proyectoId}_${p.productoId}`] || p.ventaRealManual || 0);
+                                                        const real = boxValue(p, 'real_meta') || 0;
                                                         const proyectoNombre = proyectos.find(pj => pj.id === p.proyectoId)?.nombre || 'Sede Desconocida';
                                                         const productoNombre = productos.find(pd => pd.id === p.productoId)?.nombreDelProducto || 'Producto';
 
@@ -766,7 +747,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                                                 <MenuIcon className="w-3.5 h-3.5 text-text-muted/40 mx-auto" />
                                                                             </td>
                                                                             <td className="px-4 py-0.5 sticky left-0 bg-white font-bold text-primary border-r border-border">
-                                                                                {proyectoNombre}
+                                                                                {proyectoNombre} / {clientes.find(c=>c.id===p.clientId)?.nombre || 'Sin cliente'}
                                                                                 <div className="text-[10px] font-black text-text-muted italic tracking-tighter uppercase flex items-center gap-1">
                                                                                     {tieneCanjes && (
                                                                                         <span className="text-[7px] font-black text-amber-500 not-italic bg-amber-50 border border-amber-200 px-1 rounded leading-tight">⇌</span>
@@ -774,9 +755,9 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                                                     <span className={tieneCanjes ? 'opacity-50' : ''}>{productoNombre}</span>
                                                                                 </div>
                                                                             </td>
-                                                                            <td className="px-4 py-0.5 text-center font-black text-primary">{((p as any).ng2025 || p.venta2025Referencia || 0).toLocaleString()}</td>
-                                                                            <td className="px-4 py-0.5 text-center font-black text-text-secondary">{((p as any).ss2025 || p.precioCompra2025 || 0).toLocaleString()}</td>
-                                                                            <td className="px-4 py-0.5 text-center font-black text-primary">{p.presupuestoMonetario?.toLocaleString() || '0'}</td>
+                                                                            <td className="px-4 py-0.5 text-center font-black text-primary">{boxLabel(boxValue(p, 'ng_semana'))}</td>
+                                                                            <td className="px-4 py-0.5 text-center font-black text-text-secondary">{boxLabel(boxValue(p, 'cliente_enviado_semana'))}</td>
+                                                                            <td className="px-4 py-0.5 text-center font-black text-primary">{boxLabel(boxValue(p, 'enviado_anual'))}</td>
                                                                             <td className="px-4 py-0.5 text-center bg-accent/5">
                                                                                 {tieneCanjes ? (
                                                                                     <span className="font-black text-xs text-text-muted/25">—</span>
@@ -784,7 +765,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                                                     <div className="flex flex-col items-center w-full max-w-[100px] mx-auto">
                                                                                         <span className={`font-black text-xs mb-0.5 ${user.role === UserRole.LIDER_PROYECTO ? 'text-blue-600' : 'text-text-primary'}`}>{p.proyeccionCajas?.toLocaleString() || '0'}</span>
                                                                                         <div className="w-full bg-gray-200 h-1 rounded-full overflow-hidden shadow-inner">
-                                                                                            <div className="bg-orange-500 h-full transition-all duration-500" style={{ width: `${Math.min(100, (p.proyeccionCajas / (p.presupuestoMonetario || 1)) * 100)}%` }} />
+                                                                                            <div className="bg-orange-500 h-full transition-all duration-500" style={{ width: `${Math.min(100, (real / (p.proyeccionCajas || 1)) * 100)}%` }} />
                                                                                         </div>
                                                                                     </div>
                                                                                 )}
@@ -792,14 +773,14 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                                             <td className="px-4 py-0.5 text-center bg-success/5">
                                                                                 <div className="flex flex-col items-center">
                                                                                     <span className="font-black text-xs text-emerald-700">{real.toLocaleString()}</span>
-                                                                                    <span className="text-[8px] font-black text-emerald-600/60 uppercase tracking-tighter">Confirmado</span>
+                                                                                    <span className="text-[8px] font-black text-emerald-600/60 uppercase tracking-tighter">{metrics.error || metrics.loading ? 'Sin verificar' : 'Confirmado'}</span>
                                                                                 </div>
                                                                             </td>
                                                                             <td className="px-4 py-0.5 text-center">
                                                                                 {p.autorizado ? (
                                                                                     <div className="flex items-center justify-center gap-2">
                                                                                         <span className="px-2 py-0.5 bg-success/10 text-success rounded-full text-[8px] font-black uppercase tracking-widest border border-success/20">Autorizado</span>
-                                                                                        {(user.role === UserRole.SUBDIRECCION || user.role === UserRole.DIRECCION || user.role === UserRole.ADMINISTRADOR) && (
+                                                                                        {permissions.canEditGoals && (
                                                                                             <div className="flex gap-1 ml-2 border-l border-border pl-2">
                                                                                                 <button onClick={() => handleOpenEditGoal(p)} className="p-1 bg-gray-100 text-text-muted hover:text-primary rounded shadow-sm transition-colors" title="Editar Meta Autorizada"><PencilIcon className="w-3 h-3" /></button>
                                                                                                 <button onClick={() => { setGoalToDelete(p.id); setIsDeleteModalOpen(true); }} className="p-1 bg-gray-100 text-text-muted hover:text-danger rounded shadow-sm transition-colors" title="Borrar Meta Autorizada"><TrashIcon className="w-3 h-3" /></button>
@@ -811,7 +792,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                                                         <span className="px-2 py-0.5 bg-danger/10 text-danger rounded-full text-[8px] font-black uppercase tracking-widest border border-danger/20 flex items-center gap-1">
                                                                                             <ExclamationIcon className="w-2.5 h-2.5" /> Rechazado
                                                                                         </span>
-                                                                                        {(user.role === UserRole.SUBDIRECCION || user.role === UserRole.DIRECCION || user.role === UserRole.ADMINISTRADOR) && (
+                                                                                        {permissions.canEditGoals && (
                                                                                             <div className="flex gap-1 mt-1">
                                                                                                 <button onClick={() => handleOpenEditGoal(p)} className="p-1 bg-gray-100 text-text-muted hover:text-primary rounded shadow-sm transition-colors" title="Corregir Meta"><PencilIcon className="w-3 h-3" /></button>
                                                                                                 <button onClick={() => { setGoalToDelete(p.id); setIsDeleteModalOpen(true); }} className="p-1 bg-gray-100 text-text-muted hover:text-danger rounded shadow-sm transition-colors" title="Borrar Meta"><TrashIcon className="w-3 h-3" /></button>
@@ -838,7 +819,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                                                         ) : (
                                                                                             <div className="flex flex-col items-center gap-1">
                                                                                                 <span className="px-2 py-0.5 bg-amber-50 text-amber-600 rounded-full text-[8px] font-black uppercase tracking-widest border border-amber-200">Pendiente</span>
-                                                                                                {(user.role === UserRole.SUBDIRECCION || user.role === UserRole.DIRECCION || user.role === UserRole.ADMINISTRADOR) && (
+                                                                                                {permissions.canEditGoals && (
                                                                                                      <div className="flex gap-1">
                                                                                                          <button onClick={() => handleOpenEditGoal(p)} className="p-1 bg-gray-100 text-text-muted hover:text-primary rounded shadow-sm transition-colors" title="Editar Meta"><PencilIcon className="w-3 h-3" /></button>
                                                                                                          <button onClick={() => { setGoalToDelete(p.id); setIsDeleteModalOpen(true); }} className="p-1 bg-gray-100 text-text-muted hover:text-danger rounded shadow-sm transition-colors" title="Borrar Meta"><TrashIcon className="w-3 h-3" /></button>
@@ -852,7 +833,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                                         </tr>
                                                                         {tieneCanjes && canjeProductos.filter(c => c.productId).map((canje, ci) => {
                                                                             const canjeNombre = productos.find(pd => pd.id === canje.productId)?.nombreDelProducto || 'Canje';
-                                                                            const canjeReal = Number(canje.quantity) || 0;
+                                                                            const canjeReal = boxValue({ ...p, productoId: canje.productId }, 'real_meta') || 0;
                                                                             return (
                                                                                 <tr key={`${p.id}_canje_${ci}`} className="divide-x divide-border border-l-2 border-l-amber-300/60">
                                                                                     <td className="w-8 px-2 bg-amber-50/20"></td>
@@ -903,7 +884,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                         <th className={`px-4 py-1 sticky left-0 ${isLogisticMode ? 'bg-amber-700' : (hideViewSelector ? 'bg-emerald-900' : 'bg-[#002D62]')} font-black uppercase w-48 z-20`}>
                                             <div className="flex flex-col">
                                                 <span className="text-[10px] tracking-widest">{isLogisticMode ? 'SWEET SEASONS' : 'DIARIO'}</span>
-                                                <span className="text-[7px] opacity-70">Proyecto / Producto</span>
+                                                <span className="text-[7px] opacity-70">Proyecto</span>
                                             </div>
                                         </th>
 
@@ -920,75 +901,35 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                         <th className="px-4 py-1 text-center font-black uppercase tracking-tighter">
                                             {isLogisticMode ? 'TOTAL CAJAS' : (viewMode === 'cajas' ? (isCoordinatorView ? 'CARGA' : 'TOTAL CAJAS') : 'UNIDADES')}
                                         </th>
-                                        {(permissions.canApprove || permissions.canRegisterRealSales) && <th className="px-4 py-1 text-center font-black uppercase w-10"></th>}
+                                        {permissions.canEditGoals && <th className="px-4 py-1 text-center font-black uppercase w-10"></th>}
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-border">
                                     {filteredProjections.map((p, i) => {
-                                        const key = `${p.proyectoId}_${p.productoId}`;
-                                        const prog = programacionUsa[key] || { sal: {}, eta: {} };
-                                        
-                                        const totalSalida = Object.values(prog.sal).reduce((a: number, b: number) => a + b, 0) as number;
-                                        const totalLlegada = Object.values(prog.eta).reduce((a: number, b: number) => a + b, 0) as number;
-                                        const totalProgramado = Math.max(totalSalida, totalLlegada);
-
                                         const legacyDailyValues = getLegacyDailyValues(p);
                                         const hasDailyBreakdown = legacyDailyValues.some(v => v > 0) || (p.desgloseDiario && p.desgloseDiario.length > 0);
-                                        const isUnitAssigned = (p.ventaRealManual || 0) > 0;
+                                        const isUnitAssigned = freightPlanning.schedules.some(s => s.projectionId === p.id);
                                         
                                         const extraProds = (p as any).canjeProductos as { productId: string; quantity: number; type?: 'normal' | 'canje' }[] | undefined;
                                         const canjeTotal = (extraProds || []).filter(c => !c.type || c.type === 'canje').reduce((sum: number, c) => sum + (Number(c.quantity) || 0), 0);
                                         const extraTotal = (extraProds || []).filter(c => c.type === 'normal').reduce((sum: number, c) => sum + (Number(c.quantity) || 0), 0);
                                         
-                                        const displayTotal = totalProgramado > 0 ? totalProgramado : (getProjectionBaseTotal(p) + canjeTotal + extraTotal);
+                                        const displayTotal = getProjectionBaseTotal(p) + canjeTotal + extraTotal;
 
                                         return (
                                             <tr key={i} className={`divide-x divide-border hover:bg-hover ${!p.autorizado ? 'opacity-60 bg-gray-50' : ''}`}>
                                                 <td className="px-4 py-0.5 sticky left-0 bg-white font-bold text-primary border-r border-border">
-                                                    {(() => {
-                                                        const extraItems = (p as any).canjeProductos as { productId: string; quantity: number; type?: 'normal' | 'canje' }[] | undefined;
-                                                        const hasSwap = extraItems && extraItems.length > 0 && extraItems.some(c => c.productId && (!c.type || c.type === 'canje'));
-                                                        const hasExtra = extraItems && extraItems.some(c => c.type === 'normal');
-                                                        const proyectoNombre = proyectos.find(pj => pj.id === p.proyectoId)?.nombre || '';
-                                                        const productoOriginal = productos.find(pd => pd.id === p.productoId)?.nombreDelProducto || '';
-
-                                                        if (hasSwap) {
-                                                            const firstSwap = extraItems!.find(c => c.productId && (!c.type || c.type === 'canje'));
-                                                            const infoItem = productos.find(pd => pd.id === firstSwap?.productId);
-                                                            const label = (infoItem as any)?.nombre_del_producto || infoItem?.nombreDelProducto || 'Producto';
-                                                            return (
-                                                                <>
-                                                                    <div className="flex items-center gap-1">
-                                                                        <span className="text-[8px] font-black text-warning uppercase bg-warning/10 px-1 py-0.5 rounded">⇌ Canje</span>
-                                                                        <span className="text-xs font-black text-warning leading-tight uppercase">{label}</span>
-                                                                    </div>
-                                                                    <div className="text-[8px] font-black text-text-muted italic uppercase tracking-tighter mt-0.5">
-                                                                        {proyectoNombre} {hasExtra && <span className="text-blue-500">(+Extra)</span>}
-                                                                    </div>
-                                                                    <div className="text-[7px] font-bold text-text-muted/70 uppercase tracking-tighter line-through">
-                                                                        {productoOriginal}
-                                                                    </div>
-                                                                </>
-                                                            );
-                                                        }
-                                                        return (
-                                                            <>
-                                                                <div className="text-xs font-black text-primary leading-tight uppercase">
-                                                                    {productoOriginal} {hasExtra && <span className="text-[8px] text-blue-600 font-black bg-blue-50 px-1 rounded ml-1">+EXTRA</span>}
-                                                                </div>
-                                                                <div className="text-[8px] font-black text-text-muted italic uppercase tracking-tighter mt-0.5">
-                                                                    {proyectoNombre}
-                                                                </div>
-                                                            </>
-                                                        );
-                                                    })()}
+                                                    <div className="text-[10px] font-black text-primary uppercase">
+                                                        {proyectos.find(pj => pj.id === p.proyectoId)?.nombre || 'Proyecto'}
+                                                        <div className="text-[9px] font-normal">{productos.find(pd => pd.id === p.productoId)?.nombreDelProducto}</div>
+                                                    </div>
                                                 </td>
 
                                                 {weekDays.map((wd, dayIdx) => {
                                                     let boxesForThisDay = 0;
                                                     const project = proyectos.find(pj => pj.id === p.proyectoId);
                                                     
-                                                    const valFromProgramacion = isLogisticMode ? (prog.eta[wd.dateString] || 0) : (prog.sal[wd.dateString] || 0);
+                                                    const valFromProgramacion = isLogisticMode ? 0 : commercialQuantityForDay(p, wd.dateString);
                                                     
                                                     if (valFromProgramacion > 0) {
                                                         boxesForThisDay = valFromProgramacion;
@@ -1002,8 +943,8 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                             transitMs = Math.max(0, d2.getTime() - d1.getTime());
                                                         }
 
-                                                        if (p.desgloseDiario && p.desgloseDiario.length > 0) {
-                                                            p.desgloseDiario.forEach(d => {
+                                                        if (p.packingPlan != null || (p.desgloseDiario && p.desgloseDiario.length > 0)) {
+                                                            (p.packingPlan ?? p.desgloseDiario ?? []).forEach(d => {
                                                                 if (!d.fecha) return;
                                                                 const baseDate = new Date(d.fecha.split('T')[0] + 'T12:00:00Z');
                                                                 if (isNaN(baseDate.getTime())) return;
@@ -1024,7 +965,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                             boxesForThisDay = legacyDailyValues[dayIdx - 2] || 0;
                                                         }
                                                         
-                                                        if (boxesForThisDay === 0 && !hasDailyBreakdown) {
+                                                        if (boxesForThisDay === 0 && !hasDailyBreakdown && p.packingPlan == null) {
                                                             let targetDateRaw = isLogisticMode ? p.fechaLlegada : p.fechaSalida;
                                                             
                                                             if (isLogisticMode && !targetDateRaw && p.fechaSalida) {
@@ -1039,13 +980,12 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                         }
                                                     }
 
+                                                    if (!isLogisticMode) boxesForThisDay = commercialQuantityForDay(p, wd.dateString);
                                                     return (
                                                         <td key={dayIdx} className={`px-1 py-0.5 text-center border-r border-border/30 ${isLogisticMode && boxesForThisDay > 0 ? 'bg-amber-50/50 transition-colors' : ''}`}>
                                                             <div className="flex flex-col items-center">
-                                                                <span className={`font-black text-[10px] ${boxesForThisDay === 0 ? 'text-gray-200' : (isLogisticMode && boxesForThisDay > 0 ? 'text-amber-700' : 'text-primary')}`}>
-                                                                    {boxesForThisDay > 0
-                                                                        ? (viewMode === 'cajas' || isLogisticMode ? boxesForThisDay.toLocaleString() : getUnitTypeLabel(boxesForThisDay, p.productoId, true))
-                                                                        : '-'}
+                                                                <span className="font-black text-[10px] text-primary">
+                                                                    {boxesForThisDay > 0 ? (viewMode === 'cajas' || isLogisticMode ? boxesForThisDay.toLocaleString() : getUnitTypeLabel(boxesForThisDay, p.productoId, true)) : '-'}
                                                                 </span>
                                                             </div>
                                                         </td>
@@ -1091,7 +1031,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                                         </div>
                                                     )}
                                                 </td>
-                                                {(permissions.canApprove || permissions.canRegisterRealSales) && (
+                                                {permissions.canEditGoals && (
                                                     <td className="px-2 py-0.5 text-center">
                                                         <button onClick={() => handleOpenForm(p)} className="p-1 text-text-muted hover:text-primary rounded hover:bg-gray-100 transition-all">
                                                             <PencilIcon className="w-3 h-3" />
@@ -1416,7 +1356,7 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                             </select>
                                         </div>
                                         <div>
-                                            <label className="block text-[10px] font-black text-text-muted uppercase mb-2 tracking-wider">Total Venta Real</label>
+                                            <label className="block text-[10px] font-black text-text-muted uppercase mb-2 tracking-wider">Total solicitado</label>
                                             <div className="w-full bg-gray-50 border border-border rounded-xl px-4 py-3 text-sm font-black text-primary outline-none flex items-center justify-between">
                                                 <span>{getDailyBreakdownTotal(selectedProjection) || getProjectionBaseTotal(selectedProjection as StrategicProjection)}</span>
                                                 <span className="text-[8px] text-text-muted uppercase">cjs</span>
@@ -1431,6 +1371,16 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                             <button
                                 onClick={async () => {
                                     if (selectedProjection) {
+                                        if (saving || !permissions.canEditGoals) return;
+                                        const breakdown = selectedProjection.desgloseDiario || [];
+                                        if (!selectedProjection.clientId || breakdown.some(item => {
+                                            const date = new Date(item.fecha);
+                                            const period = fiscalPeriod(date);
+                                            return !item.fecha || Number.isNaN(date.getTime()) || !Number.isInteger(Number(item.cantidad)) || Number(item.cantidad) <= 0 || period.week !== activeWeek || period.year !== planningYear;
+                                        })) {
+                                            addNotification({ type: 'warning', title: 'Revisar solicitud', message: 'Selecciona cliente y fechas de la semana con cajas enteras y positivas.' });
+                                            return;
+                                        }
                                         const dias = [0, 0, 0, 0, 0, 0, 0];
                                         if (selectedProjection.desgloseDiario && selectedProjection.desgloseDiario.length > 0) {
                                             selectedProjection.desgloseDiario.forEach(d => {
@@ -1478,14 +1428,16 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                         setSaving(null);
 
                                         if (error) {
-                                            addNotification({ type: 'danger', title: 'Fallo de Sincronizacion', message: 'No se pudieron guardar los cambios en la base de datos.' });
+                                            addNotification({ type: 'danger', title: 'Fallo de Sincronizacion', message: error.message || 'No se pudieron guardar los cambios en la base de datos.' });
                                         } else {
                                             handleCloseForm();
                                             addNotification({ type: 'success', title: 'DB Sincronizada', message: 'Configuración guardada exitosamente.' });
                                             fetchData();
+                                            void freightPlanning.refresh();
                                         }
                                     }
                                 }}
+                                disabled={!!saving}
                                 className={`px-8 py-2.5 text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-lg active:scale-95 transition-all ${isCoordinatorView ? 'bg-emerald-600' : 'bg-primary'}`}
                             >
                                 {isCoordinatorView ? 'Confirmar Salida' : 'Guardar Cambios'}
@@ -1497,8 +1449,8 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
 
             {isNewGoalModalOpen && createPortal(
                 <div className="fixed inset-0 bg-black/80 z-[160] flex items-center justify-center p-4 backdrop-blur-sm">
-                    <div className="bg-surface rounded-2xl shadow-2xl max-w-lg w-full border border-border animate-fade-in overflow-hidden">
-                        <div className="p-6 border-b border-border bg-primary text-white font-black uppercase tracking-widest">Establecer Nueva Meta Estratégica</div>
+                    <div className="bg-surface rounded-2xl shadow-2xl max-w-lg w-full max-h-[95vh] overflow-y-auto border border-border animate-fade-in">
+                        <div className="p-6 border-b border-border bg-primary text-white font-black uppercase tracking-widest">{editingGoalId ? 'Editar meta comercial' : 'Nueva meta comercial'}</div>
                         <div className="p-8 space-y-6 bg-background/30">
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-1.5">
@@ -1516,42 +1468,29 @@ const StrategicPlanningPage: React.FC<StrategicPlanningPageProps> = ({
                                     </select>
                                 </div>
                             </div>
-                            <div className="grid grid-cols-2 gap-4 border-t border-border pt-6">
-                                <div className="space-y-1.5">
-                                    <label className="text-[10px] font-black text-text-muted uppercase">NG 2025</label>
-                                    <div className="relative">
-                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted font-bold text-xs"></span>
-                                        <input
-                                            type="number"
-                                            step="0.01"
-                                            className="w-full bg-white border border-border rounded-xl pl-8 pr-4 py-2 text-sm font-bold"
-                                            value={newGoalData.ng2025}
-                                            onChange={e => setNewGoalData({ ...newGoalData, ng2025: parseFloat(e.target.value) || 0 })}
-                                        />
-                                    </div>
-                                </div>
-                                <div className="space-y-1.5"><label className="text-[10px] font-black text-text-muted uppercase">Presupuesto</label><input type="number" className="w-full bg-white border border-border rounded-xl px-4 py-2 text-sm font-black text-primary" value={newGoalData.presupuestoMonetario} onChange={e => setNewGoalData({ ...newGoalData, presupuestoMonetario: parseFloat(e.target.value) || 0 })} /></div>
+                            <div className="space-y-3 border-t border-border pt-4">
+                                <label className="block text-xs font-bold text-primary">Cliente solicitado por Comercial
+                                    <select required value={newGoalData.clientId} onChange={e => setNewGoalData({ ...newGoalData, clientId: e.target.value })} className="w-full border border-border rounded-xl p-3 mt-1 bg-white">
+                                        <option value="">Seleccione cliente...</option>
+                                        {clientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                                    </select>
+                                </label>
+                                <label className="block text-xs font-bold text-primary">Cajas requeridas en la semana
+                                    <input type="number" min="1" step="1" value={newGoalData.proyeccionCajas}
+                                        disabled={!!editingGoalId && (projections.find(p => p.id === editingGoalId)?.desgloseDiario?.length || 0) > 1}
+                                        onChange={e => setNewGoalData({ ...newGoalData, proyeccionCajas: Number(e.target.value) })} className="w-full border border-border rounded-xl p-3 mt-1 bg-white" />
+                                </label>
+                                <label className="block text-xs font-bold text-primary">Día requerido de carga
+                                    <input type="date" min={editingGoalId ? undefined : localDateKey()} value={newGoalData.requestedDate} disabled={!!editingGoalId && (projections.find(p => p.id === editingGoalId)?.desgloseDiario?.length || 0) > 1}
+                                        onChange={e => setNewGoalData({ ...newGoalData, requestedDate: e.target.value })} className="w-full border border-border rounded-xl p-3 mt-1 bg-white" />
+                                </label>
+                                <p className="text-xs text-text-secondary">La semana y el año de la meta se calculan con la fecha de carga. Puedes elegir hoy o cualquier fecha futura. El líder distribuye las cajas en Programación de empaque.</p>
                             </div>
-
-                            <div className="grid grid-cols-2 gap-4 border-t border-border pt-6">
-                                <div className="space-y-1.5">
-                                    <label className="text-[10px] font-black text-text-muted uppercase">SS 2025</label>
-                                    <div className="relative">
-                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted font-bold text-xs"></span>
-                                        <input
-                                            type="number"
-                                            step="0.01"
-                                            className="w-full bg-white border border-border rounded-xl pl-8 pr-4 py-2 text-sm font-bold"
-                                            value={newGoalData.ss2025}
-                                            onChange={e => setNewGoalData({ ...newGoalData, ss2025: parseFloat(e.target.value) || 0 })}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
+                            <p className="text-xs text-text-secondary">Los históricos se consultan por semana y año en la matriz. Presupuesto y Real enviado se calculan desde Embarques.</p>
                         </div>
                         <div className="p-6 bg-surface border-t border-border flex justify-end gap-3 shrink-0">
                             <button onClick={() => setIsNewGoalModalOpen(false)} className="px-5 py-3 text-xs font-black uppercase text-text-secondary hover:bg-hover rounded-xl transition-all">Cancelar</button>
-                            <button onClick={handleCreateGoal} className="px-8 py-3 bg-primary text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-lg transition-all">Guardar Meta</button>
+                            <button disabled={savingGoal} onClick={handleCreateGoal} className="px-8 py-3 bg-primary text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-lg transition-all">{savingGoal ? 'Guardando...' : 'Guardar Meta'}</button>
                         </div>
                     </div>
                 </div>, document.body

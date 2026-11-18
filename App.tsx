@@ -1,6 +1,8 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { View, User, UserRole } from './types';
 import Sidebar from './components/Sidebar';
+import { planningSectionAccess, initialViewForRole } from './utils/planningAccess';
+import { trafficViews } from './utils/dispatch';
 import Header from './components/Header';
 import { NotificationProvider } from './components/NotificationProvider';
 import { TiveMonitoringProvider } from './components/TiveMonitoringProvider';
@@ -26,6 +28,7 @@ const BaseDeDatosPage = lazy(() => import('./components/BaseDeDatosPage'));
 const UsaShipmentReportPage = lazy(() => import('./components/UsaShipmentReportPage'));
 const LiderProgramacionUsaPage = lazy(() => import('./components/LiderProgramacionUsaPage'));
 const FruitQualityChecker = lazy(() => import('./components/FruitQualityChecker'));
+const OperationalPlanningPage = lazy(() => import('./components/OperationalPlanningPage'));
 const StrategicPlanningPage = lazy(() => import('./components/StrategicPlanningPage'));
 const ClientReportDashboard = lazy(() => import('./components/ClientReportDashboard'));
 const TiveMapPage = lazy(() => import('./components/TiveMapPage'));
@@ -243,15 +246,22 @@ const App: React.FC = () => {
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
   const toggleChat = () => setIsChatOpen(!isChatOpen);
 
+  useEffect(() => { if (user) setCurrentView(initialViewForRole(user.role)); }, [user?.role]);
+
   const renderContent = () => {
     if (!user) return null;
 
     const canAccess = (view: View) => {
+      const sectionAccess = planningSectionAccess(view,user.role);
+      if(sectionAccess !== undefined) return sectionAccess;
       if ([View.INSPECTION_QUALITY, View.INSPECTION_DASHBOARD, View.INSPECTION_INCIDENTS].includes(view)) {
         return [UserRole.ADMINISTRADOR, UserRole.INSPECTOR].includes(user.role);
       }
 
       if (user.role === UserRole.INSPECTOR) return false;
+      if (user.role === UserRole.COMPRAS) return [View.STRATEGIC_PLANNING,View.SETTINGS].includes(view);
+      if (user.role === UserRole.TRAFICO_RI) return trafficViews.includes(view);
+      if (user.role === UserRole.COMERCIAL) return [View.STRATEGIC_PLANNING,View.SETTINGS].includes(view);
 
       if ([UserRole.GERENCIA, UserRole.ADMINISTRADOR].includes(user.role)) return true;
       if ([UserRole.DIRECCION, UserRole.SUBDIRECCION].includes(user.role)) {
@@ -273,6 +283,7 @@ const App: React.FC = () => {
       }
       if (user.role === UserRole.COORDINADOR) {
         return [
+          View.STRATEGIC_PLANNING,
           View.USA_SHIPMENTS, 
           (View as any).USA_EMBARQUES, 
           View.LIDER_PROGRAMACION_USA, 
@@ -284,6 +295,7 @@ const App: React.FC = () => {
       }
       if ([UserRole.SUBGERENCIA, UserRole.ADMINISTRATIVO].includes(user.role)) {
         return [
+          View.STRATEGIC_PLANNING,
           View.USA_SHIPMENTS, 
           (View as any).USA_EMBARQUES, 
           View.DATABASE, 
@@ -301,7 +313,9 @@ const App: React.FC = () => {
     let component;
     
     if (!canAccess(currentView)) {
-      if (user.role === UserRole.INSPECTOR) {
+      if ([UserRole.COMPRAS,UserRole.TRAFICO_RI].includes(user.role)) {
+        component = <OperationalPlanningPage user={user} view={initialViewForRole(user.role)} />;
+      } else if (user.role === UserRole.INSPECTOR) {
         component = (
           <div className="p-8 text-center bg-white rounded-3xl border border-border shadow-sm">
             <h2 className="text-xl font-black text-primary uppercase">Módulo Inspecciones de Campo</h2>
@@ -310,7 +324,7 @@ const App: React.FC = () => {
         );
       } else if ([UserRole.COORDINADOR, UserRole.SUBGERENCIA, UserRole.ADMINISTRATIVO].includes(user.role)) {
         component = <UsaShipmentReportPage initialView="active" user={user} />;
-      } else if (user.role === UserRole.LIDER_PROYECTO) {
+      } else if ([UserRole.LIDER_PROYECTO, UserRole.COMERCIAL].includes(user.role)) {
         component = <StrategicPlanningPage user={user} />;
       } else {
         component = <Dashboard onViewChange={setCurrentView} />;
@@ -333,6 +347,9 @@ const App: React.FC = () => {
 
         case View.LIDER_PROGRAMACION_USA: component = <LiderProgramacionUsaPage user={user} />; break;
         case View.FRUIT_QUALITY: component = <FruitQualityChecker />; break;
+        case View.PACKING_PLANNING:
+        case View.SUPPLY_COLLECTION:
+        case View.TRANSPORT_PLANNING: component = <OperationalPlanningPage key={currentView} user={user} view={currentView} />; break;
         case View.STRATEGIC_PLANNING: component = <StrategicPlanningPage user={user} />; break;
         case View.EXEC_REPORT: component = <ClientReportDashboard />; break;
         case View.TIVE_MAP: component = <TiveMapPage />; break;
@@ -384,6 +401,9 @@ const App: React.FC = () => {
         return 'Nuevo Embarque USA';
       case View.LIDER_PROGRAMACION_USA: return 'Programación Líder';
       case View.FRUIT_QUALITY: return 'Calidad IA';
+      case View.PACKING_PLANNING: return 'Programación de empaque';
+      case View.SUPPLY_COLLECTION: return 'Compras · Recolección de insumos';
+      case View.TRANSPORT_PLANNING: return 'Unidades sugeridas · cajas pendientes de asignar';
       case View.STRATEGIC_PLANNING: return 'Alcance y Metas';
       case View.EXEC_REPORT: return 'Matriz Cumplimiento';
       case View.TIVE_MAP: return 'Consola Mapas';

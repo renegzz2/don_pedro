@@ -33,7 +33,7 @@ const LiderView: React.FC<LiderViewProps> = ({ user }) => {
       </div>
 
       <div className="bg-surface rounded-2xl border border-border shadow-sm p-4">
-        {activeTab === 'plan' ? <StrategicPlanningPage user={user} /> : <LiderProgramacionUsaPage />}
+        {activeTab === 'plan' ? <StrategicPlanningPage user={user} /> : <LiderProgramacionUsaPage user={user} />}
       </div>
     </div>
   );

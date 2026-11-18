@@ -234,4 +234,39 @@ const CustomsServicesPage: React.FC = () => {
                                 {isConsolidated && (
                                     <div className="bg-gray-50 p-4 rounded-2xl border border-border animate-fade-in">
                                         <div className="flex justify-between items-center mb-3">
-                                            <h5 className="text-[10px] font-black text-text-muted uppercase tracking-widest"></h5>
+                                            <h5 className="text-[10px] font-black text-text-muted uppercase tracking-widest flex items-center gap-2"><BoxIcon className="w-4 h-4" /> Desglose por producto o lote</h5>
+                                            <button type="button" onClick={handleAddDesgloseRow} className="text-xs font-bold text-primary">+ Agregar partida</button>
+                                        </div>
+                                        <div className="space-y-3">
+                                            {desglose.map(row => (
+                                                <div key={row.id} className="flex items-center gap-2">
+                                                    <input required aria-label="Descripción de la partida" className={inputClass} value={row.descripcion} onChange={e => handleUpdateDesglose(row.id, 'descripcion', e.target.value)} placeholder="Producto / lote" />
+                                                    <input required aria-label="Monto de la partida" type="number" min="0.01" step="0.01" className={`${inputClass} max-w-[140px]`} value={row.monto} onChange={e => handleUpdateDesglose(row.id, 'monto', e.target.value)} placeholder="Monto" />
+                                                    <button type="button" aria-label="Eliminar partida" onClick={() => handleRemoveDesgloseRow(row.id)} className="p-2 text-danger"><XIcon className="w-4 h-4" /></button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <p className="mt-3 text-right text-sm font-bold text-primary">Total del desglose: ${totalDesglose.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                                    </div>
+                                )}
+                            </div>
+                            <div>
+                                <label className={labelClass}>Estatus de pago</label>
+                                <select className={inputClass} value={formData.estatusPago} onChange={e => setFormData({ ...formData, estatusPago: e.target.value })}>
+                                    <option value="Pendiente">Pendiente</option>
+                                    <option value="Pagado">Pagado</option>
+                                </select>
+                            </div>
+                            <div className="flex justify-end gap-3 border-t border-border pt-4">
+                                <button type="button" onClick={() => { setIsModalOpen(false); resetForm(); }} className="px-5 py-3 text-xs font-black text-text-secondary uppercase">Cancelar</button>
+                                <button type="submit" className="bg-primary text-white px-6 py-3 rounded-xl text-xs font-black uppercase">Guardar factura</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default CustomsServicesPage;
